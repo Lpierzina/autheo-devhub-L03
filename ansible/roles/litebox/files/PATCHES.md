@@ -236,3 +236,140 @@ never by source) and passed the probe in 3 s each while serving 7 and 29
 live containers; `hive-node` stayed active throughout. Full sandbox
 exec/PTY behaviour on top of this runner is verified separately per node
 before `HIVE_LITEBOX_VERIFIED=1` is set.
+
+## 2026-09-09: hunks 4-8 -- the guest can write into its own application tree again
+
+**Symptom (live, fc-sanjose, the day it flipped mock -> Litebox):** every
+deployment that creates a file at runtime died at launch with
+`EACCES: permission denied, mkdir '/workspace/server/data'` (a JSON storage
+adapter's `fs.promises.mkdir`); a bare `open(O_CREAT)` in the same directory
+did not even get an errno -- the runner panicked (`layered.rs:683`
+`Result::unwrap()` on `NoWritePerms`, exit 101).
+
+**Root cause, measured with a standalone runner + hand-built ustar (see the
+`lb-eacces-repro*.py` / `lb-node-witness.py` scripts this session left on the
+host), never inferred from mode bits:** the guest runs as ONE fixed non-root
+uid (1000, `DEFAULT_GUEST_UID`); the `--initial-files` tar is a read-only
+lower layer whose directories are all synthesized 0777 root-owned (explicit
+tar directory entries are ignored, so the sealed artifact's 0555 modes are
+irrelevant); creating anything inside such a directory first migrates its
+ancestors into the writable in-memory upper layer
+(`layered.rs::mkdir_migrating_ancestor_dirs`), and the first migrated
+ancestor is created directly under the upper root `/` -- which
+`in_mem::RootDir::new` creates root-owned 0755. uid 1000 cannot write there,
+so the migration fails and EVERY write into `/workspace/...` fails, while
+`/tmp` (created world-writable under `with_root_privileges` at setup) works.
+Seeding the upper layer via `--resume-from` is not a workaround: its importer
+neither honours directory entries nor creates parents (`PathError
+(MissingComponent)`). The pre-fork microsoft runner (`e7984422`, still on
+fr/phx/sj3/4/5) allows mkdir and create in these directories (it panics on
+truncate/append of a shipped file and returns ENOSYS for `rename`, so it is
+not a clean baseline either) -- the mkdir/create regression is fork-introduced,
+the same DAC-strictness family hunks 1-3 already patch for uid 0.
+
+- **Hunk 4 (`litebox_runner_linux_userland/src/lib.rs`):** after the `/tmp`
+  bootstrap, `chmod("/", 0777)` under `with_root_privileges`. The guest is the
+  only principal in its private in-memory tree (the sandbox boundary is
+  seccomp + the rewriter, never in-mem DAC), so a writable root protects
+  nothing and denies the guest its own cwd. Restores exactly the microsoft
+  runner's observable behaviour (`mkdir /scratch` and `mkdir
+  /workspace/newdir` succeed, `/tmp` unchanged).
+- **Hunk 5 (`litebox/src/fs/layered.rs`):** the `O_CREAT` path's ancestor
+  migration maps `MkdirError` into `OpenError` instead of `.unwrap()`ing --
+  a guest sees EACCES/EROFS/EIO, never a dead runner. The rename/link/symlink
+  migrations already propagate; `mkdir` uses `?`.
+
+An adversarial review (four refute-only agents, sixteen independent
+verifiers, 2026-09-09) did not refute the root cause or hunks 4-5 but
+witnessed two more fork defects that hunk 4 makes REACHABLE for every
+application, plus panics hunk 5 did not cover. All fixed in `layered.rs`,
+all re-witnessed with the reviewers' own scripts on the rebuilt runner
+(`ba293cc870250604…`):
+
+- **Hunk 6 (`rename`):** renaming over a file that exists in the tar layer
+  inserted a *tombstone* at the target after the upper rename succeeded --
+  and `open`/`file_status` consult the tombstone BEFORE the upper layer, so
+  the freshly renamed file answered ENOENT to every non-`O_CREAT` open while
+  `readdir` still listed it (the write-tmp-then-`rename()` atomic-save idiom
+  every JSON store uses "succeeded" and then lost its file; the microsoft
+  runner returns ENOSYS for rename instead). Fix: drop the stale cached entry
+  (what the no-shadow branch already did) -- the upper file shadows the
+  lower one exactly as the design doc describes. Witness: `rename=ok |
+  read={"v":"NEW"} | stat=11 | access=ok` (was `read=ENOENT | stat=ENOENT`).
+- **Hunk 7 (`migrate_file_up`):** the copy-up created the upper file with
+  the LOWER's mode. A sealed hive artifact ships every file with the write
+  bits stripped (0444, a host-integrity measure, not the app's intent), so
+  the very next write-open of the guest's own fresh copy failed
+  `AccessNotAllowed` and the unwrap killed the runner (`layered.rs:377`,
+  exit 101) for any app rewriting a file that shipped in its repo. The copy
+  is owned by the guest uid, so it now carries `WUSR`. Witness: overwrite /
+  append / `r+` / chmod+write of a 0444 shipped file and of
+  `/workspace/.hive-runtime-artifact-v1.json` all `OK` (were all exit 101).
+- **Hunk 8 (three sites):** the ancestor migration inside `migrate_file_up`
+  (`unimplemented!` at `:259`), the copy-up create (`.unwrap()` at `:269`,
+  now `ReadOnlyFileSystem -> UpperCannotHoldPath` so an outer layer can take
+  it) and the descriptor re-open in the swap loop (`.unwrap()` at `:377`)
+  all report `MigrationError` instead of panicking. `Io` rather than a new
+  permission variant because every caller maps `Io` and treats
+  `NoReadPerms` as `unimplemented!()` -- closing those caller arms is a
+  follow-up (PRD `litebox-migration-noreadperms-callers`).
+
+Residuals the review recorded and this change deliberately leaves alone
+(PRD rows, all pre-existing on every runner): a root-owned 0600 tar file is
+shadowed by `O_APPEND|O_CREAT` instead of EACCES; `--export-writable-layer`
+/`--resume-from` round trip is broken in hive's invocation shape (no hive
+caller); a 0777 root has no sticky bit, so the guest may `rmdir` the
+platform-created `/tmp` (it could already unlink/tombstone any platform file
+on the shipped runner -- the sandbox boundary is seccomp + the rewriter,
+never in-mem DAC, and no host-side consumer trusts guest-visible files after
+launch); coreutils `touch` fails `utimensat(NULL)` with EFAULT.
+
+**Delivery facts the review corrected:** the live fleet was 7 nodes at
+review time and fc-sanjose the ONLY live AnEntrypoint-pin Litebox node
+(tokyo closes SSH, seoul presents a changed host key -- not accepted,
+sj6/va4/va5/cvm-1/2 down); fr/phx/sj3/4/5 run the microsoft pin and are not
+affected by the mkdir regression. Two hazards fixed alongside: the role's
+`git` task could not fetch the dangling pin at all (`ansible.builtin.git`
+never fetches a bare sha without `refspec`) and an un-`--limit`ed `--tags
+litebox` run would have stripped fc-phoenix's `litebox-verified.conf`
+(inventory line lacked the flag while the node runs verified) and restarted
+it into MockBackend. The probe (`hive-cloud --litebox-probe`, check (c))
+now writes into a tar-layer directory, overwrites a shipped 0444 file and
+does the atomic rename, so none of these classes can PASS a probe again.
+
+Witnessed on fc-sanjose with the rebuilt runner (`49b592c9e0f413d9…`, old
+pin tree + patch): the exact SurveyBot pattern as a Node one-liner
+(`fs.promises.mkdir('/workspace/server/data',{recursive:true})` + write +
+read-back + `readdirSync`) -> `FAIL EACCES` on the shipped runner, `WROTE
+{"ok":1} DIR ['data','server.js']` exit 0 on the fixed one.
+
+**Pin state at the time of this change, recorded so the next session does
+not re-derive it:** `AnEntrypoint/litebox` main was rewritten AGAIN between
+2026-09-03 and 2026-09-07 -- it now carries 1331 commits (the pre-wipe history
+restored, HEAD `f62ca45c` 2026-09-07 by `lanmower <admin@coas.co.za>`, GitHub
+login on that commit `imraanlockhat`, org members `jb0gie`/`lanmower`). The
+pinned `c325d5d9` is a DANGLING commit: not on any ref, so a plain clone
+cannot check it out, but `git fetch origin <full-sha>` still retrieves it (the
+role's `git` module fetches by sha, so the role still builds) -- GitHub may
+garbage-collect it at any time. Hunks 1-5 apply cleanly to `c325d5d9`;
+against current main only the runner `lib.rs` hunk 1 no longer applies.
+Re-pinning to a reachable commit needs the six-step legitimacy check
+(`litebox-upstream-history-wipe-20260904` memory) and a rebase of that one
+hunk -- deliberately not done inside a production incident.
+
+**Landed on fc-sanjose 2026-09-10 (operator-approved):** `/usr/local/bin/
+litebox-runner` = `ba293cc870250604…` (sj's own current source tree at the
+old pin `19532929` + hunks 1-8 -- the pin the role now builds, `c325d5d9`,
+takes the identical 17-hunk `networking.patch`); previous runner kept at
+`/usr/local/bin/litebox-runner.old-b9cf16fbf666605f`; hardened probe PASS
+against the installed binary; hive-node NOT restarted (running cells keep
+their runner, new cold starts pick up the fix). End-to-end witness:
+`survey-botdemo` (the reporting project, every build of which had died at
+launch) deployed through the real `/v1/git/deploy` path as `dpl-ff8f276ca4`
+-> `ready`, deployment `dpl-d171d4ffa4`, `https://survey-botdemo.shadw.app/`
+answering 200 `SurveyBot Dashboard` through the public round-robin host.
+Review residue kept on fc-sanjose for the next session: the exact built tree
+`/root/litebox-fix-src-oldpin` (the only copy of the old-pin sources -- that
+commit no longer exists upstream), the pin clone `/root/litebox-fix-src`,
+the probe build `/root/hive-cloud-probe-bin`, and the witness scripts
+`/root/lb-*.py`, `/root/adv-*.py`.

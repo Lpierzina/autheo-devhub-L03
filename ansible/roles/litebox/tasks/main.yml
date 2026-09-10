@@ -52,6 +52,14 @@
     repo: "{{ litebox_repo_url }}"
     dest: "{{ litebox_src_dir }}"
     version: "{{ litebox_commit }}"
+    # The pin is a DANGLING commit upstream (AnEntrypoint/litebox rewrote its
+    # history again on 2026-09-07; c325d5d9 is on no ref). A plain clone never
+    # sees it and this task then fails before the patch/build/install steps
+    # (witnessed 2026-09-09). GitHub still serves the object by full sha, and
+    # this explicit refspec is what makes the module fetch it -- see
+    # files/PATCHES.md ("Pin state") and PRD `litebox-pin-dangling-repin` for
+    # the real fix (a reachable, legitimacy-checked pin).
+    refspec: "+{{ litebox_commit }}:refs/remotes/origin/pinned"
     force: true
 
 - name: Copy the fleet-hive networking patch to the target host (wildcard bind + per-invocation guest IP/gateway)

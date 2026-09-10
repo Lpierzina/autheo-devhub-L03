@@ -368,7 +368,27 @@ fn capable(
         let has_public = n.public_ip.is_some() || n.public_ip6.is_some();
         has_public && (eligible(n) || (n.healthy && n.backend == "mock"))
     } else {
-        eligible(n)
+        // The SAME mock widening the container branch above already applies,
+        // for the SAME reason `build_isolation_capable`/`runtime_artifact_capable`
+        // (checked above, lines 322-327) explicitly admit mock: it builds and
+        // runs a function directly on the host (`crate::mock::run_build_process`),
+        // needing neither the isolated BuildExecutor nor the split host/guest
+        // runtime-artifact contract those gates exist to enforce for Firecracker.
+        // `eligible()` alone does not know this — its own `isolated` check is a
+        // narrower, Firecracker/Litebox-specific definition of "production
+        // isolation backend" that was never meant to also gate "can this node
+        // run a source build at all". Without this widening, a REGION WHOLLY
+        // MADE OF MOCK NODES (e.g. `los-angeles`, this fleet's Mac dev nodes)
+        // could never place ANY non-container deployment there: every mock node
+        // passed both real capability checks and was then excluded anyway by
+        // `eligible()`'s separate backend check, landing every LA-region source
+        // deploy on BUILD_ISOLATION_UNAVAILABLE despite 5 genuinely-capable
+        // healthy nodes. Unlike the container branch, no `has_public` gate is
+        // needed here: a non-container function is served through the
+        // platform's own gateway/DNS routing (already NAT/private-address safe
+        // — the same mesh path every ordinary function deployment already
+        // uses), never by a client dialing the node's host port directly.
+        eligible(n) || (n.healthy && n.backend == "mock")
     }
 }
 

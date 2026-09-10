@@ -511,6 +511,11 @@ const NODE_BIND_SHIM_JS: &str = include_str!("litebox-bind-shim.js");
 /// every launch failed with `Cannot find module
 /// '/tmp/hive-litebox-cells/hive-litebox-bind-shim.js'`.
 const GUEST_BIND_SHIM_PATH: &str = "/hive-litebox-bind-shim.js";
+/// Tar-layer directory the Tier-2 probe's guest must be able to write into
+/// (`network_smoke_test_inner`, check (c)). Under `/workspace` on purpose:
+/// that is the delivered workdir every real function gets, so the probe
+/// exercises the exact path shape an application's own `mkdir` uses.
+const PROBE_WRITE_DIR: &str = "/workspace/hive-write-probe";
 const GUEST_RUNTIME_GUARD_PATH: &str = "/hive-litebox-runtime-guard.js";
 const INITIAL_FILES_ALIAS_NAME: &str = "initial-files.tar";
 const DELIVERED_WORKDIR: &str = "/workspace";
@@ -1517,7 +1522,30 @@ impl LiteboxBackend {
         _directories: &ArtifactDirectories,
         archive: &ArtifactTemp,
     ) -> anyhow::Result<()> {
-        append_litebox_runtime_augmentation(archive.file.try_clone()?, Vec::new(), None, None).await
+        append_litebox_runtime_augmentation(
+            archive.file.try_clone()?,
+            Vec::new(),
+            None,
+            None,
+            // A directory that exists ONLY in the read-only tar layer, exactly
+            // the shape of a deployment's own `/workspace` tree: the probe's
+            // guest must be able to mkdir + create + read back INSIDE it.
+            // Two planted files, both 0o444 like every platform entry (and like every
+            // file of a sealed hive artifact): `.keep` is OVERWRITTEN in place (the
+            // copy-up path), `seed.json` is REPLACED by the write-tmp-then-rename
+            // atomic-save idiom every JSON store uses (the rename-over-lower path).
+            vec![
+                (
+                    PathBuf::from(PROBE_WRITE_DIR.trim_start_matches('/')).join(".keep"),
+                    b"hive litebox write probe\n".to_vec(),
+                ),
+                (
+                    PathBuf::from(PROBE_WRITE_DIR.trim_start_matches('/')).join("seed.json"),
+                    b"{\"seed\":true}\n".to_vec(),
+                ),
+            ],
+        )
+        .await
     }
 
     /// Allocate a fresh TUN device + real `/30` for one cell — mirrors
@@ -1978,6 +2006,7 @@ impl LiteboxBackend {
             deps.clone(),
             Some(reference.identity.clone()),
             Some(bin.to_path_buf()),
+            Vec::new(),
         )
         .await
         .with_context(|| format!("failed to augment runtime tar for {}", bin.display()))?;
@@ -2316,8 +2345,43 @@ impl LiteboxBackend {
         // preloaded (harmless no-op for this wildcard case, but proves the
         // shim mechanism itself didn't break — see `LiteboxBackend`'s
         // module doc, "Networking").
+        // (c) Writable-workdir check — added 2026-09-09 after every deployment
+        // that creates a file at runtime died at launch on the day fc-sanjose
+        // became Litebox (`EACCES: permission denied, mkdir '/workspace/
+        // server/data'`): the guest runs as one fixed non-root uid, and a
+        // fork-side regression made every directory that came from the
+        // read-only tar layer — the application's own cwd — unwritable. The
+        // two checks above never wrote a byte, so the runner PASSED while the
+        // fleet's own workloads could not start. The guest now mkdirs, creates
+        // and reads back a file inside a tar-layer directory before it ever
+        // listens; a failure there exits before listening, and the existing
+        // "exited before listening" refusal carries the guest's own errno.
+        // Four writes, each a distinct guest-filesystem path that has broken
+        // on this fleet: (1) mkdir + create in a tar-layer directory (the
+        // 2026-09-09 EACCES launch failure), (2) overwrite a file that
+        // shipped 0o444 in the tar (copy-up used to kill the runner,
+        // `layered.rs:377`), (3) write-tmp-then-`rename()` over a shipped file
+        // (the atomic-save idiom; the renamed target used to answer ENOENT),
+        // (4) read every result back. The token the guest serves is the
+        // concatenation, so the host check cannot pass on a partial success.
+        let write_dir = format!("{PROBE_WRITE_DIR}/data");
+        let write_token = format!("write-ok-{}", now_ms());
         let script = format!(
-            "require('http').createServer((q,r)=>{{r.end('{marker}')}}).listen({PROBE_PORT});"
+            "const fs=require('fs');\
+             fs.mkdirSync('{write_dir}',{{recursive:true}});\
+             fs.writeFileSync('{write_dir}/probe.json','{write_token}');\
+             fs.writeFileSync('{PROBE_WRITE_DIR}/.keep','over-'+'{write_token}');\
+             fs.writeFileSync('{PROBE_WRITE_DIR}/seed.json.tmp','ren-'+'{write_token}');\
+             fs.renameSync('{PROBE_WRITE_DIR}/seed.json.tmp','{PROBE_WRITE_DIR}/seed.json');\
+             const back=[fs.readFileSync('{write_dir}/probe.json','utf8'),\
+               fs.readFileSync('{PROBE_WRITE_DIR}/.keep','utf8'),\
+               fs.readFileSync('{PROBE_WRITE_DIR}/seed.json','utf8'),\
+               fs.statSync('{PROBE_WRITE_DIR}/seed.json').size].join('|');\
+             require('http').createServer((q,r)=>{{r.end('{marker}:'+back)}}).listen({PROBE_PORT});"
+        );
+        let want_body = format!(
+            "{marker}:{write_token}|over-{write_token}|ren-{write_token}|{}",
+            format!("ren-{write_token}").len()
         );
 
         let mut cmd = Command::new(&self.cfg.runner_bin);
@@ -2415,6 +2479,16 @@ impl LiteboxBackend {
             resp_text.contains(&marker),
             "litebox network smoke test: real HTTP round trip completed but the response was \
              wrong — got: {resp_text:?}, want a body containing {marker:?} ({guest_output})"
+        );
+        anyhow::ensure!(
+            resp_text.contains(&want_body),
+            "litebox write probe FAILED: the guest served HTTP but one of the four writes inside \
+             {PROBE_WRITE_DIR} (a read-only tar-layer directory, the shape of every deployment's \
+             /workspace) did not round-trip — got: {resp_text:?}, want a body containing \
+             {want_body:?}. Segments: create-in-tar-dir | overwrite-0444-file | rename-over-file | \
+             renamed-size. This is the EACCES-at-launch / copy-up / rename regression class: \
+             networking.patch hunks 4-8 are missing or ineffective in the runner on this host \
+             ({guest_output})"
         );
         Ok(())
     }
@@ -3430,6 +3504,7 @@ async fn append_litebox_runtime_augmentation(
     deps: Vec<PathBuf>,
     identity: Option<RuntimeArtifactIdentity>,
     runtime_bin: Option<PathBuf>,
+    extra_entries: Vec<(PathBuf, Vec<u8>)>,
 ) -> anyhow::Result<()> {
     tokio::task::spawn_blocking(move || {
         append_litebox_runtime_augmentation_blocking(
@@ -3437,6 +3512,7 @@ async fn append_litebox_runtime_augmentation(
             &deps,
             identity.as_ref(),
             runtime_bin.as_deref(),
+            &extra_entries,
         )
     })
     .await
@@ -3493,6 +3569,11 @@ fn append_litebox_runtime_augmentation_blocking(
     deps: &[PathBuf],
     identity: Option<&RuntimeArtifactIdentity>,
     runtime_bin: Option<&Path>,
+    // Caller-supplied platform files (guest path relative to `/`, bytes),
+    // staged 0o444 like every other platform entry. Used by the Tier-2 probe
+    // to plant a directory in the read-only tar layer that its guest program
+    // then has to write INTO — see `network_smoke_test_inner`, check (c).
+    extra_entries: &[(PathBuf, Vec<u8>)],
 ) -> anyhow::Result<()> {
     const BLOCK_BYTES: u64 = 512;
     const END_MARKER_BLOCKS: u64 = 2;
@@ -3676,6 +3757,9 @@ fn append_litebox_runtime_augmentation_blocking(
             &Path::new("workspace").join(hive_core::RUNTIME_ARTIFACT_MARKER_FILE),
             &identity_bytes,
         )?;
+    }
+    for (path, bytes) in extra_entries {
+        append_platform_tar_entry(&mut builder, path, bytes)?;
     }
     append_platform_tar_entry(
         &mut builder,

@@ -193,6 +193,11 @@ pub struct CloudState {
     /// (managed-world service) -- no external queue dependency.
     pub world_queue: Arc<crate::world_queue::WorldQueue>,
     pub projects: crate::project_settings::ProjectStore,
+    /// Durable record of each project's current production host + source —
+    /// survives the host node's death (unlike `peer_deployments`, which is
+    /// dropped the instant its source node ages out). See
+    /// `production_deployments.rs` module doc.
+    pub production_deployments: crate::production_deployments::ProductionDeploymentStore,
     pub builds: crate::git::BuildStore,
     /// Per-build cancellation bookkeeping (live OS process group + mirror
     /// target + driving task) — see `git::BuildCancelRegistry`. Deliberately
@@ -746,6 +751,7 @@ impl CloudState {
             acme_http01: crate::acme::Http01Store::new(),
             world_queue: crate::world_queue::WorldQueue::new(),
             projects: crate::project_settings::ProjectStore::new(),
+            production_deployments: crate::production_deployments::ProductionDeploymentStore::new(),
             builds: crate::git::BuildStore::new(),
             build_cancels: crate::git::BuildCancelRegistry::new(),
             deployment_ledger,

@@ -4884,6 +4884,23 @@ async fn run_build(
     // deployment record itself.
     crate::persist::persist(cloud);
 
+    // Node-death self-heal: durably record "this project's production source
+    // now lives on THIS node" the same instant the build record itself is
+    // made durable, above. Real-git only (matches `git_for_project_fleet`'s
+    // own filter) — a zip/image redeploy is not source a node death can lose
+    // in the same way, and is out of scope for the first cut of this
+    // mechanism. See `production_deployments.rs` module doc for why this
+    // exists: `peer_deployments` (the only other fleet-wide "what's deployed
+    // where" signal) is deleted the instant its source node is marked dead —
+    // the exact moment this fact is needed most.
+    if !build_failed && is_production {
+        if let Some(git) = info.git.as_ref().filter(|g| g.is_real_git()) {
+            cloud
+                .production_deployments
+                .record(&project, git.clone(), &cloud.node_name);
+        }
+    }
+
     // Issue #2: derive the intelligent service graph ASYNC, off the deploy path. It
     // reads the checked-out repo (kept for live deployments), detects the framework,
     // scans consumed deps / monorepo packages / bundled front+back / databases, and

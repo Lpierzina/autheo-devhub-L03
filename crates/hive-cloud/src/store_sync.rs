@@ -214,6 +214,24 @@ pub static REGISTRY: &[SyncedStore] = &[
         },
     },
     SyncedStore {
+        name: "production_deployments",
+        // Same MERGE-not-replace shape as `projects`: tombstoned deletions,
+        // newest-`updated_ms`-per-row wins. Genuinely-empty is normal (no
+        // production deployments yet on a fresh fleet), never distinguished
+        // from "not synced yet" — the row-level merge already tolerates a
+        // legitimately-partial local set, unlike the wholesale-replace stores
+        // above that must decline an empty payload outright.
+        snapshot: |c| enc(&c.production_deployments.snapshot_synced()),
+        adopt: |c, b| {
+            let synced: crate::production_deployments::SyncedProductionDeployments =
+                serde_json::from_slice(b).ok()?;
+            if synced.rows.is_empty() && synced.tombstones.is_empty() {
+                return None;
+            }
+            Some(c.production_deployments.merge_synced(synced))
+        },
+    },
+    SyncedStore {
         name: "incidents",
         snapshot: |c| enc(&c.incidents.snapshot()),
         adopt: |c, b| {
@@ -571,6 +589,7 @@ pub static MERGE_STORES: &[&str] = &[
     "browser_presence",
     "projects",
     "teams",
+    "production_deployments",
 ];
 
 /// Rate-limit config wire shape — deliberately config-only (see the registry

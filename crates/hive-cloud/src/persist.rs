@@ -82,6 +82,12 @@ pub struct PlatformSnapshot {
     /// `crate::queues` module doc) — this snapshot only ever holds metadata.
     #[serde(default)]
     pub queues: crate::queues::SyncedQueues,
+    /// Durable "what's deployed where" for node-death self-heal — see
+    /// `production_deployments.rs` module doc. Rows + tombstones together
+    /// (unlike `projects`/`project_tombstones`) since there is no separate
+    /// incarnation-tombstone concept here to justify splitting them.
+    #[serde(default)]
+    pub production_deployments: crate::production_deployments::SyncedProductionDeployments,
     /// Same rationale for the projects store (see `SyncedProjects`).
     #[serde(default)]
     pub project_tombstones: std::collections::BTreeMap<String, u64>,
@@ -564,6 +570,7 @@ pub fn capture(cloud: &Arc<CloudState>) -> PlatformSnapshot {
         database_tombstones: cloud.databases.tombstones_snapshot(),
         database_studio_replay: cloud.databases.studio_replay_snapshot(),
         queues: cloud.queues.snapshot_synced(),
+        production_deployments: cloud.production_deployments.snapshot_synced(),
         project_tombstones,
         project_incarnation_tombstones,
         metrics_rollup: cloud.metrics.rollup_snapshot(),
@@ -1068,6 +1075,10 @@ pub fn restore(cloud: &Arc<CloudState>, snap: PlatformSnapshot) {
     cloud.databases.data_load(snap.database_data);
     cloud.databases.tombstones_load(snap.database_tombstones);
     cloud.queues.load(snap.queues);
+    cloud.production_deployments.load(
+        snap.production_deployments.rows.into_values().collect(),
+        snap.production_deployments.tombstones,
+    );
     cloud.metrics.rollup_load(snap.metrics_rollup);
     // BuildStore::load() already reconciles Queued/Building -> Error for its
     // own per-build log records internally (git.rs) -- no duplicate needed

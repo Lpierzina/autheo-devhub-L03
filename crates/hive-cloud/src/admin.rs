@@ -6344,6 +6344,11 @@ async fn delete_project_owned(
     };
 
     c.git_index.remove_project(&project);
+    // Node-death self-heal: a deleted project's last-known production host
+    // must not survive it — the reconciler must never "relocate" a project
+    // the tenant deliberately removed. Tombstoned, same durability discipline
+    // as `ProjectStore`'s own tombstones.
+    c.production_deployments.remove(&project);
     let preserved_domains: std::collections::HashSet<String> = c
         .projects
         .all_domains()
@@ -16016,6 +16021,7 @@ fn all_collections(c: &Arc<CloudState>) -> Vec<(&'static str, Vec<Value>)> {
         ("workflow_defs", wf_defs),
         ("workflow_runs", wf_runs),
         ("incidents", c.incidents.snapshot().into_iter().map(|i| json!(i)).collect()),
+        ("production_deployments", c.production_deployments.snapshot().into_iter().map(|r| json!(r)).collect()),
         ("webhooks", c.webhooks.snapshot().into_iter().map(|w| json!(w)).collect()),
         ("billing", c.billing.all_accounts().into_iter().map(|a| json!(a)).collect()),
         ("billing_ledger", c.billing.snapshot().1.into_iter().map(|l| json!(l)).collect()),

@@ -68,6 +68,7 @@ mod microfrontends;
 mod microfrontends_api;
 mod notifications;
 mod persist;
+mod production_deployments;
 mod project_settings;
 mod push;
 mod queues;
@@ -1816,6 +1817,13 @@ async fn async_main() -> anyhow::Result<()> {
     // makes `git push` deploy even when the owner's GitHub connection is dead or
     // the project was imported as a plain public URL. See git::spawn_git_poll_reconcile.
     git::spawn_git_poll_reconcile(cloud.clone());
+
+    // Node-death self-heal: when a project's production host has been
+    // offline past a grace period, automatically redeploy it to a healthy
+    // node elsewhere (leader-only) — see production_deployments.rs module
+    // doc for why the durable production_deployments store exists and what
+    // it fixes that the volatile peer_deployments gossip cache cannot.
+    production_deployments::spawn_node_death_reconcile(cloud.clone());
 
     // Keep podman's shared lock pool from filling up. Containers AND volumes each
     // consume one lock out of a fixed pool (default 2048), so a leak starves the
