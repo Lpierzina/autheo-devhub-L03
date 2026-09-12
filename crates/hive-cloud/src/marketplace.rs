@@ -7,9 +7,10 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::State,
     http::HeaderMap,
+    middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -404,7 +405,11 @@ struct AllocationRequest {
     deployment: fluid_core::GitDeployRequest,
 }
 
-pub fn routes() -> Router<Arc<CloudState>> {
+/// All Marketplace service routes live beneath this router-level HMAC gate.
+/// Keeping the gate here makes adding a route to `/v1/marketplace/*` through
+/// this module safe by default: handlers receive the original raw bytes only
+/// after the signature, timestamp, digest, and nonce have been verified.
+pub fn routes(cloud: Arc<CloudState>) -> Router {
     Router::new()
         .route("/v1/marketplace/l0/deployments", get(list_deployments))
         .route(
@@ -417,6 +422,11 @@ pub fn routes() -> Router<Arc<CloudState>> {
         )
         .route("/v1/marketplace/payments/verify", post(verify_payment))
         .route("/v1/marketplace/l0/allocations", post(submit_allocation))
+        .route_layer(axum::middleware::from_fn_with_state(
+            cloud.clone(),
+            verify_marketplace_hmac,
+        ))
+        .with_state(cloud)
 }
 
 /// Operator-only visibility intentionally remains separate from the
@@ -736,6 +746,39 @@ fn verify_marketplace_request(
     Ok(())
 }
 
+/// Validate a Marketplace request while preserving its exact raw body for the
+/// downstream JSON handler. A nonce is persisted only after every header,
+/// digest, timestamp, and HMAC check succeeds (inside
+/// `verify_marketplace_request`), so malformed or unauthenticated traffic
+/// cannot consume another request's nonce.
+async fn verify_marketplace_hmac(
+    State(cloud): State<Arc<CloudState>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    const MAX_MARKETPLACE_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+    let (parts, body) = req.into_parts();
+    let method = parts.method.as_str().to_owned();
+    let path = parts.uri.path().to_owned();
+    let headers = parts.headers.clone();
+    let body = match axum::body::to_bytes(body, MAX_MARKETPLACE_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(_) => {
+            return error(
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                "marketplace_request_too_large",
+            )
+            .into_response();
+        }
+    };
+    if let Err(err) = verify_marketplace_request(&cloud, &method, &path, &headers, &body) {
+        return err.into_response();
+    }
+    next.run(axum::http::Request::from_parts(parts, Body::from(body)))
+        .await
+}
+
 fn idempotency_key(headers: &HeaderMap) -> Result<String, MarketplaceError> {
     headers
         .get("idempotency-key")
@@ -787,15 +830,7 @@ fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
 
 async fn list_deployments(
     State(cloud): State<Arc<CloudState>>,
-    headers: HeaderMap,
 ) -> ApiResult<MarketplaceDeploymentsResponse> {
-    verify_marketplace_request(
-        &cloud,
-        "GET",
-        "/v1/marketplace/l0/deployments",
-        &headers,
-        &[],
-    )?;
     let now = hive_core::now_ms();
     let listed = listed_deployments(&cloud);
     cloud
@@ -810,17 +845,7 @@ async fn list_deployments(
     }))
 }
 
-async fn get_settlement_config(
-    State(cloud): State<Arc<CloudState>>,
-    headers: HeaderMap,
-) -> ApiResult<Value> {
-    verify_marketplace_request(
-        &cloud,
-        "GET",
-        "/v1/marketplace/settlement-config",
-        &headers,
-        &[],
-    )?;
+async fn get_settlement_config(State(cloud): State<Arc<CloudState>>) -> ApiResult<Value> {
     Ok(Json(
         json!({"settlement": settlement_config(&cloud).await?}),
     ))
@@ -831,13 +856,6 @@ async fn create_payment_intent(
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Value> {
-    verify_marketplace_request(
-        &cloud,
-        "POST",
-        "/v1/marketplace/payment-intents",
-        &headers,
-        &body,
-    )?;
     let key = idempotency_key(&headers)?;
     if let Some(intent) = cloud.marketplace_security.intent_for_key(&key) {
         return Ok(Json(payment_intent_response(&intent)));
@@ -929,18 +947,7 @@ fn payment_intent_response(intent: &PaymentIntent) -> Value {
         "settlement": intent.settlement})
 }
 
-async fn verify_payment(
-    State(cloud): State<Arc<CloudState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> ApiResult<Value> {
-    verify_marketplace_request(
-        &cloud,
-        "POST",
-        "/v1/marketplace/payments/verify",
-        &headers,
-        &body,
-    )?;
+async fn verify_payment(State(cloud): State<Arc<CloudState>>, body: Bytes) -> ApiResult<Value> {
     let request: PaymentVerificationRequest = serde_json::from_slice(&body)
         .map_err(|_| error(axum::http::StatusCode::BAD_REQUEST, "invalid_request"))?;
     let mut intent = cloud
@@ -1280,13 +1287,6 @@ async fn submit_allocation(
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Value> {
-    verify_marketplace_request(
-        &cloud,
-        "POST",
-        "/v1/marketplace/l0/allocations",
-        &headers,
-        &body,
-    )?;
     let key = idempotency_key(&headers)?;
     if let Some(id) = cloud.marketplace_security.allocation_for_key(&key) {
         if let Some(allocation) = cloud.marketplace_allocations.get(&id) {

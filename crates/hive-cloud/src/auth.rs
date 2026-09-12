@@ -151,9 +151,10 @@ pub fn api_key_claims(c: &crate::state::CloudState, token: &str) -> Option<Claim
     })
 }
 
-/// Middleware: when a JWT secret is configured, require a valid bearer token on
-/// mutating requests (POST/PUT/DELETE). Reads are always allowed. With no secret
-/// configured it is a pass-through (dev mode).
+/// Middleware: when a JWT secret is configured, require a valid bearer token
+/// for every Admin request other than `/healthz` and endpoints that authenticate
+/// with their own, incompatible credential scheme. With no secret configured it
+/// is a pass-through for local development.
 ///
 /// Tenancy: whenever a valid platform JWT — or a valid dashboard API key — is
 /// presented (read OR write), the verified [`Claims`] are inserted into the
@@ -185,9 +186,10 @@ pub async fn require_auth(
     if !enforced() {
         return next.run(req).await;
     }
-    let method = req.method().clone();
-    let is_mutation = matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH");
-    // Allow the token-mint + health endpoints unauthenticated.
+    // `/healthz` is the sole unauthenticated Admin endpoint. The other paths
+    // below each perform their own mandatory authentication and cannot use a
+    // platform JWT: webhook HMAC, Marketplace HMAC, database bearers, or
+    // WebDAV Basic/Digest credentials respectively.
     let path = req.uri().path();
     // GitHub/Stripe webhooks can't present a platform JWT — they are
     // authenticated by their own HMAC signature inside the handler
@@ -238,14 +240,10 @@ pub async fn require_auth(
         // closed with 401 before any filesystem call reaches `dav_server`,
         // the same shape as `/v1/sqlite/`'s per-database bearer above.
         || path.starts_with("/v1/drive/webdav/");
-    if !is_mutation || open {
+    if open || authed {
         return next.run(req).await;
     }
-    if authed {
-        next.run(req).await
-    } else {
-        (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response()
-    }
+    (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response()
 }
 
 #[cfg(test)]

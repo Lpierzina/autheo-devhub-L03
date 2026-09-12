@@ -30,8 +30,8 @@ pub fn router(cloud: Arc<CloudState>) -> Router {
         // Distinct from /healthz: liveness ("is the process serving HTTP") tells
         // you nothing about mesh MEMBERSHIP — a node can be process-alive,
         // /healthz-green, and fully isolated from its fleet (the node-a/node-b
-        // incident). Unauthenticated like /healthz, for the same reason: the
-        // watchdog polling it has no JWT.
+        // incident). Unlike /healthz this reveals topology and is authenticated
+        // whenever HIVE_JWT_SECRET enables Admin enforcement.
         .route("/v1/mesh", get(mesh_health))
         .route("/v1/overview", get(overview))
         .route("/v1/tasks/health", get(tasks_health))
@@ -7836,12 +7836,16 @@ async fn mesh_admit(
     ))
 }
 
-/// Unauthenticated, liveness-adjacent mesh-membership probe (`/v1/mesh`) — no
-/// JWT, matching `/healthz`, since the watchdog/monitoring polling it has none.
-/// Deliberately separate from `/healthz`: liveness ("is the process serving
-/// HTTP") tells you nothing about mesh membership. See `MeshHealth`'s doc.
-async fn mesh_health(State(c): State<Arc<CloudState>>) -> Json<Value> {
-    Json(json!(c.mesh_health()))
+/// Authenticated mesh-membership probe. Deliberately separate from `/healthz`:
+/// liveness ("is the process serving HTTP") tells you nothing about mesh
+/// membership. A local watchdog that cannot hold a credential must use only
+/// the minimal `/healthz` route.
+async fn mesh_health(
+    State(c): State<Arc<CloudState>>,
+    claims: Option<axum::Extension<crate::auth::Claims>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    require_auth_read(claims.as_ref().map(|e| &e.0))?;
+    Ok(Json(json!(c.mesh_health())))
 }
 
 /// THIS node's supervised background loops: restart counts + heartbeat age.

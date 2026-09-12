@@ -3,7 +3,8 @@ info:
   title: Hive Admin / control-plane API
   version: 1.0.0
   description: "**INTERNAL CONTROL PLANE \u2014 NOT A PUBLIC API.**\nDeployment expectation: Hive Admin is bound to loopback\
-    \ or a private\nmanagement network. This API is not intended for direct Internet exposure.\nMarketplace must not call\
+    \ by default. A private management bind requires `HIVE_ADMIN_PRIVATE_NETWORK=1`\nplus `HIVE_JWT_SECRET`; public, wildcard,\
+    \ and link-local binds fail startup. Public host dispatch explicitly rejects Admin.\nMarketplace must not call\
     \ this API; it calls the private DevHub Marketplace\nAPI instead. The source router is `crates/hive-cloud/src/admin.rs`,\
     \ with\nmodule routes merged in `main.rs`.\n"
 servers:
@@ -17,16 +18,15 @@ paths:
       summary: Process liveness
       security: []
       x-autheo-security-classification: INTERNAL_CONTROL_PLANE
-      x-autheo-auth: 'Current security boundary: NETWORK ISOLATION / LOOPBACK ONLY'
+      x-autheo-auth: 'Unauthenticated minimal liveness only; loopback/private management networking only.'
       responses:
         '200':
           description: Plain-text `ok`
   /v1/mesh:
     get:
       summary: Local mesh membership health
-      security: []
       x-autheo-security-classification: INTERNAL_CONTROL_PLANE
-      x-autheo-auth: 'Current security boundary: NETWORK ISOLATION / LOOPBACK ONLY; reads are not JWT-gated.'
+      x-autheo-auth: JWT/API-key identity required when `HIVE_JWT_SECRET` is configured.
       responses:
         '200':
           $ref: '#/components/responses/Json'
@@ -34,7 +34,7 @@ paths:
     get:
       summary: List registered nodes and facts
       x-autheo-security-classification: INTERNAL_CONTROL_PLANE
-      x-autheo-auth: Network isolation; JWT claims may be attached but reads are allowed by middleware.
+      x-autheo-auth: JWT/API-key identity required when `HIVE_JWT_SECRET` is configured.
       responses:
         '200':
           description: Node registry
@@ -48,8 +48,7 @@ paths:
     get: &id001
       summary: Internal read operation
       x-autheo-security-classification: INTERNAL_CONTROL_PLANE
-      x-autheo-auth: 'Current security boundary: NETWORK ISOLATION / LOOPBACK ONLY for anonymous reads; supplied JWT/API-key
-        claims bind tenancy.'
+      x-autheo-auth: JWT/API-key identity required when `HIVE_JWT_SECRET` is configured; handler authorization remains route-specific.
       responses:
         '200':
           $ref: '#/components/responses/Json'
@@ -327,9 +326,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: HS256 JWT (`HIVE_JWT_SECRET`) or a `hive_` tenant API key. Mutations are rejected without one only when
-        `HIVE_JWT_SECRET` is configured; reads remain middleware-open. This conditional behavior is a documented security
-        gap for any non-loopback deployment.
+      description: HS256 JWT (`HIVE_JWT_SECRET`) or a `hive_` tenant API key. Every Admin route except minimal `/healthz`
+        rejects an absent or invalid credential when `HIVE_JWT_SECRET` is configured. Routes using their own mandatory
+        credential scheme (webhooks, Marketplace HMAC, database bearers, and WebDAV) remain separate. This API is
+        loopback/private-management-only.
   responses:
     Json:
       description: Handler-specific JSON response

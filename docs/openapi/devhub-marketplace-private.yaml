@@ -111,12 +111,14 @@ components:
         map its `DEVHUB_MARKETPLACE_KEY_ID` and
         `DEVHUB_MARKETPLACE_SIGNING_SECRET` to an entry there.
 
-        Canonical UTF-8 input is
+        The complete Marketplace router verifies these headers against the
+        exact raw request body before any endpoint handler runs. Canonical UTF-8 input is
         `METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + SHA256_HEX(BODY)`.
         GET signs the SHA-256 of an empty body. The timestamp is Unix
         milliseconds and must be within 300000 ms of DevHub's clock. The nonce
         (1–128 characters) is durable, scoped by `key-id:nonce`, single-use for
-        600000 ms, and persisted after consumption. Digest/signature failure,
+        600000 ms, and persisted only after all header, digest, timestamp, and
+        signature validation succeeds. Digest/signature failure,
         missing/malformed headers, unknown keys, and clock expiry are rejected;
         a reused nonce is HTTP 409.
   parameters:
