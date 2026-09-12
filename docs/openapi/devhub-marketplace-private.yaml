@@ -5,7 +5,8 @@ info:
   description: |
     **PRIVATE_SERVICE_TO_SERVICE.** This is the Marketplace-to-DevHub integration
     implemented by `hive-cloud`. It is not a browser API and is not an L0 mesh
-    API. Marketplace talks only to DevHub; DevHub owns Hive scheduling.
+    API. Marketplace talks only to DevHub through the four routes below;
+    DevHub owns Hive scheduling.
 
     Deployment expectation: expose this only to the Marketplace service over a
     private, authenticated service path. Documentation does not authorize a
@@ -18,6 +19,7 @@ security:
 paths:
   /v1/marketplace/l0/deployments:
     get:
+      operationId: listMarketplaceL0Deployments
       summary: List currently eligible L0 deployment advertisements
       x-autheo-security-classification: PRIVATE_SERVICE_TO_SERVICE
       description: |
@@ -31,18 +33,9 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/DeploymentList'}}}
         '401': {$ref: '#/components/responses/InvalidSignature'}
         '409': {$ref: '#/components/responses/Replay'}
-  /v1/marketplace/settlement-config:
-    get:
-      summary: Read the active settlement profile
-      x-autheo-security-classification: PRIVATE_SERVICE_TO_SERVICE
-      responses:
-        '200':
-          description: Current verified settlement configuration
-          content: {application/json: {schema: {type: object, required: [settlement], properties: {settlement: {$ref: '#/components/schemas/SettlementSnapshot'}}}}}
-        '401': {$ref: '#/components/responses/InvalidSignature'}
-        '503': {$ref: '#/components/responses/SettlementUnavailable'}
   /v1/marketplace/payment-intents:
     post:
+      operationId: createMarketplacePaymentIntent
       summary: Create or return an immutable payment intent
       x-autheo-security-classification: PRIVATE_SERVICE_TO_SERVICE
       description: Requires `Idempotency-Key`. The selected advertisement must
@@ -61,6 +54,7 @@ paths:
         '503': {$ref: '#/components/responses/SettlementUnavailable'}
   /v1/marketplace/payments/verify:
     post:
+      operationId: verifyMarketplacePayment
       summary: Verify a payment receipt against its immutable intent snapshot
       x-autheo-security-classification: PRIVATE_SERVICE_TO_SERVICE
       description: Repeating the same transaction hash is idempotent. A different
@@ -78,6 +72,7 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
   /v1/marketplace/l0/allocations:
     post:
+      operationId: submitMarketplaceL0Allocation
       summary: Submit a verified settlement for constrained Hive scheduling
       x-autheo-security-classification: PRIVATE_SERVICE_TO_SERVICE
       description: |
@@ -141,13 +136,6 @@ components:
       type: object
       required: [error]
       properties: {error: {type: string}}
-    Node:
-      type: object
-      required: [provider_id, canonical_node_id, region]
-      properties: {provider_id: {type: string}, canonical_node_id: {type: string}, region: {type: string}}
-    NodeFacts:
-      type: object
-      properties: {healthy: {type: boolean}, backend: {type: string}, disk_free_gb: {type: integer}}
     Capacity:
       type: object
       required: [vcpu, ram_mib, storage_gib]
@@ -242,12 +230,3 @@ components:
       type: object
       required: [allocation_id, status]
       properties: {allocation_id: {type: string, description: 'The order reference'}, status: {type: string, enum: [submitted, scheduled, failed]}, build_id: {type: [string, 'null']}}
-  examples:
-    SignedRequest:
-      summary: Fake header values only
-      value:
-        X-Marketplace-Key-Id: marketplace-local
-        X-Marketplace-Timestamp: '1770000000000'
-        X-Marketplace-Nonce: fake-random-nonce
-        X-Marketplace-Content-SHA256: deadbeef...
-        X-Marketplace-Signature: deadbeef...

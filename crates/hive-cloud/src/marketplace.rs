@@ -413,10 +413,6 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
     Router::new()
         .route("/v1/marketplace/l0/deployments", get(list_deployments))
         .route(
-            "/v1/marketplace/settlement-config",
-            get(get_settlement_config),
-        )
-        .route(
             "/v1/marketplace/payment-intents",
             post(create_payment_intent),
         )
@@ -843,12 +839,6 @@ async fn list_deployments(
             .map(|entry| MarketplaceDeployment::from_listed(entry, now))
             .collect(),
     }))
-}
-
-async fn get_settlement_config(State(cloud): State<Arc<CloudState>>) -> ApiResult<Value> {
-    Ok(Json(
-        json!({"settlement": settlement_config(&cloud).await?}),
-    ))
 }
 
 async fn create_payment_intent(

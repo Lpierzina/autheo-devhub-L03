@@ -1,6 +1,7 @@
 import "server-only";
 
 const POLICY_CONTRACT_VERSION = 1;
+const POLICY_VERSION = 1;
 const NODE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const SENSITIVE_KEY = /(address|credential|secret|token|claim|control.?plane|private|metadata)/i;
 
@@ -118,6 +119,9 @@ export function validateMarketplacePlacementPolicy(
     throw new MarketplacePolicyError(409, "INCOMPATIBLE_VERSION", "Unsupported Marketplace placement-policy contract version.");
   }
   const policyVersion = positiveSafeInteger(policy.policy_version, "policy_version");
+  if (policyVersion !== POLICY_VERSION) {
+    throw new MarketplacePolicyError(409, "INCOMPATIBLE_VERSION", "Unsupported Marketplace placement-policy version.");
+  }
   if (text(policy.marketplace_order_id, "marketplace_order_id") !== marketplaceOrderId) {
     throw new MarketplacePolicyError(403, "ORDER_MISMATCH", "Marketplace policy does not belong to the requested order.");
   }

@@ -22,8 +22,9 @@ DevHub must reject a placement policy when `buyer_tenant_id` does not exactly ma
 
 ## Policy contract and failures
 
-The current accepted contract is `contract_version: 1` with a positive
-`policy_version`. A policy must contain exactly the v1 fields:
+The current accepted contract is `contract_version: 1` and `policy_version: 1`.
+Unknown contract and policy versions are rejected. A policy must contain exactly
+the v1 fields:
 `marketplace_order_id`, `buyer_tenant_id`, `status`, `revocation_state`,
 `valid_from`, `valid_until`, `approved_node_ids`, `provider_id`, `listing_id`,
 `region`, `resources`, and `commercial`.

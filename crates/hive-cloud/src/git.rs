@@ -1910,7 +1910,7 @@ fn marketplace_approved_nodes(
         return Ok(None);
     };
     anyhow::ensure!(
-        snapshot.contract_version == 1 && snapshot.policy_version > 0,
+        snapshot.contract_version == 1 && snapshot.policy_version == 1,
         "MARKETPLACE_POLICY_INVALID: unsupported Marketplace policy version"
     );
     anyhow::ensure!(

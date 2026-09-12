@@ -11,9 +11,13 @@
 
 ## Required separation
 
-Marketplace must never call Hive Admin directly. It uses the documented DevHub
-HMAC API. DevHub verifies settlement and owns the scheduler integration.
-Publishing documentation does not permit publishing the HTTP server.
+Marketplace must never call Hive Admin directly. It uses only the documented
+private DevHub HMAC API. DevHub retrieves Marketplace placement policy
+server-side with a Clerk JWT minted from the `autheo-marketplace-v1` template,
+then validates and snapshots it before invoking Hive. `hive_jwt`,
+`HIVE_INTERNAL_TOKEN`, and custom DevHub/Hive M2M headers are never sent to
+Marketplace. Publishing documentation does not permit publishing the HTTP
+server.
 
 `hive-cloud` defaults Admin to `127.0.0.1:8786`. It rejects public, wildcard,
 and link-local Admin binds at startup. An RFC1918 or IPv6 ULA management bind

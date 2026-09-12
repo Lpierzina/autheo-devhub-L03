@@ -3,17 +3,22 @@
 Resolved findings are intentionally omitted. This is an evidence report, not a
 request to weaken any boundary.
 
-1. Marketplace has no allocation status/read endpoint, usage-record endpoint,
-   or Marketplace callback handler in the implemented router. Consumers must
-   not depend on the older `nodes`, allocation route/fulfilment, or
-   `x-marketplace-key` contract described in `docs/marketplace-l0-routing.md`;
-   that document is stale relative to `marketplace.rs`.
-2. `GET /v1/admin/marketplace` is operator-only, but it is a Hive Admin route,
+1. `GET /v1/admin/marketplace` is operator-only, but it is a Hive Admin route,
    not an alternate Marketplace service endpoint.
-3. Many Admin handlers return handler-specific JSON rather than a stable
+2. Many Admin handlers return handler-specific JSON rather than a stable
    shared response envelope; the internal spec intentionally leaves those
    schemas broad where code does not declare a stable DTO. Expanding it safely
    requires route-by-route contract work, not guessed schemas.
+
+## Intentionally deferred Marketplace work
+
+Marketplace allocation status/read APIs, callbacks, and DevHub/Hive usage
+ingestion are not requirements of the approved integration. `POST
+/usage-records` is buyer-authenticated and is not a DevHub/Hive ingestion
+surface. If a future integration needs allocation callbacks, usage ingestion,
+or node-verifier completion, it requires a separately reviewed Marketplace
+contract covering authentication, tenant binding, idempotency and replay
+handling, payload sanitization, error semantics, and operational ownership.
 
 ## Resolved boundaries
 

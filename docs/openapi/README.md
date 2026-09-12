@@ -9,17 +9,27 @@ or any public access.
 | `devhub-marketplace-private.yaml` | Marketplace → DevHub | Private service-to-service only, HMAC authenticated |
 | `hive-admin-internal.yaml` | Hive Admin/control plane | Loopback or private management network only |
 
-The implementation currently has five Marketplace routes:
+Marketplace calls DevHub through exactly four private service-to-service routes:
 
 * `GET /v1/marketplace/l0/deployments`
-* `GET /v1/marketplace/settlement-config`
 * `POST /v1/marketplace/payment-intents`
 * `POST /v1/marketplace/payments/verify`
 * `POST /v1/marketplace/l0/allocations`
 
-There is no Marketplace allocation lookup/status route, settlement-profile
-write route, usage-record route, or Marketplace callback route in the current
-router. Do not infer one from prior architecture documents.
+DevHub calls Marketplace only for
+`GET /v1/marketplace/orders/{marketplace_order_id}/placement-policy`, from its
+server-side route with a Clerk JWT minted from the
+`autheo-marketplace-v1` template. That Marketplace endpoint is not a Hive
+Admin route and is intentionally absent from this private DevHub OpenAPI
+document.
+
+Marketplace allocation status/read APIs, callbacks, and DevHub/Hive usage
+ingestion are not current requirements. `POST /usage-records` is
+buyer-authenticated, not a DevHub/Hive ingestion surface. Any future need for
+allocation callbacks, usage ingestion, or node-verifier completion requires a
+separately reviewed Marketplace contract covering authentication, tenant
+binding, idempotency/replay, payload sanitization, error semantics, and
+operational ownership.
 
 Do not add Swagger UI for Hive Admin. Static files are intentionally the only
 documentation delivery mechanism in this change.
