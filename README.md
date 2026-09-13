@@ -13,12 +13,13 @@ It reproduces Hive's components — Control Plane, per-Hive API, Box Daemon, Cel
 Daemon, warm pools, scheduler, autoscaler, and the cell lifecycle — behind a
 pluggable isolation backend:
 
-- **mock** — a cell is a sandboxed child-process build. Runs anywhere (incl.
-  macOS / Apple Silicon) so you can exercise the whole control plane today.
-- **firecracker** — a cell is a real Firecracker microVM. It runs anywhere a KVM
+- **litebox** — a cell is a sandboxed application kernel with complete syscall wrapping, cross architecture. Runs anywhere (incl.
+  Windows, Linux, macOS / Apple Silicon / x86 64, ARM) so you can exercise the whole control plane today.
+- **firecracker** — a cell is a real Firecracker microVM. (check out PVM below) This runs anywhere a KVM
   interface is available: an **M3/M4 Mac** via a Lima nested-virt VM, a **bare-metal
   Linux box** with real `/dev/kvm`, or even an **ordinary cloud VM without nested
   virtualization** via **PVM** (see [Firecracker without KVM (PVM)](#firecracker-without-kvm-on-plain-cloud-vms-pvm)).
+  PVM brings KVM into the userspace , allowing pagetables and shadow tables to virtualize resources instead of using traditional virtualization extensions  like Intel VT-x or AMD-V. [1] (https://github.com/TencentCloud/CubeSandbox/blob/master/docs/guide/pvm-deploy.md), [2] (https://cubesandbox.com/guide/quickstart)
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the concept→code map and the build
 lifecycle.
