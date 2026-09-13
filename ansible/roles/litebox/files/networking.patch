@@ -1,19 +1,220 @@
+diff --git a/litebox/src/fs/in_mem.rs b/litebox/src/fs/in_mem.rs
+index 1961f5e..9adfab8 100644
+--- a/litebox/src/fs/in_mem.rs
++++ b/litebox/src/fs/in_mem.rs
+@@ -1370,6 +1370,15 @@ impl UserInfo {
+ 
+ impl Permissions {
+     fn can_read_by(&self, current: UserInfo) -> bool {
++        // Fleet patch (hive): CAP_DAC_OVERRIDE semantics -- uid 0 bypasses the
++        // discretionary read/write bits (and may execute when any x bit is set),
++        // exactly as Linux root does. Without this the runner cannot even stage
++        // its own program: RHEL-family hosts ship /usr/bin as 0555, the runner
++        // recreates that directory in the in-mem FS with the host mode, and the
++        // CREAT open under with_root_privileges then fails with NoWritePerms.
++        if current.user == 0 {
++            return true;
++        }
+         if self.userinfo.user == current.user {
+             self.mode.contains(Mode::RUSR)
+         } else if self.userinfo.group == current.group {
+@@ -1379,6 +1388,9 @@ impl Permissions {
+         }
+     }
+     fn can_write_by(&self, current: UserInfo) -> bool {
++        if current.user == 0 {
++            return true;
++        }
+         if self.userinfo.user == current.user {
+             self.mode.contains(Mode::WUSR)
+         } else if self.userinfo.group == current.group {
+@@ -1388,6 +1400,9 @@ impl Permissions {
+         }
+     }
+     fn can_execute_by(&self, current: UserInfo) -> bool {
++        if current.user == 0 {
++            return self.mode.intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH);
++        }
+         if self.userinfo.user == current.user {
+             self.mode.contains(Mode::XUSR)
+         } else if self.userinfo.group == current.group {
+diff --git a/litebox/src/fs/layered.rs b/litebox/src/fs/layered.rs
+index 330a27e..2e53f82 100644
+--- a/litebox/src/fs/layered.rs
++++ b/litebox/src/fs/layered.rs
+@@ -256,17 +256,48 @@ impl<Platform: sync::RawSyncPrimitivesProvider, Upper: super::FileSystem, Lower:
+                                 let _ = self.lower.close(&lower_fd);
+                                 return Err(MigrationError::UpperCannotHoldPath);
+                             }
+-                            Err(e) => unimplemented!("{e} when setting up ancestor dirs"),
++                            // Fleet patch (hive): any other ancestor failure (the guest
++                            // uid may not create the parent in the upper layer, an I/O
++                            // fault, a path fault) becomes an ordinary migration error the
++                            // caller maps to an errno -- never a dead runner. `Io` because
++                            // every caller already maps it (a more precise permission
++                            // variant is `unimplemented!()` at every call site upstream).
++                            Err(_) => {
++                                let _ = self.lower.close(&lower_fd);
++                                return Err(MigrationError::Io);
++                            }
+                         }
+                         // Now we can actually open the file.
++                        //
++                        // Fleet patch (hive): the upper copy is OWNED by the guest uid
++                        // that triggered the copy-up, so give it the owner-write bit the
++                        // guest is about to need. The lower mode is whatever the tar
++                        // carried -- for a hive deployment that is the SEALED host
++                        // artifact's mode with every write bit stripped (0444), an
++                        // integrity measure for the host tree, not the application's
++                        // intent; copying it verbatim made the very next write-open of
++                        // the fresh upper copy fail `AccessNotAllowed`, and the unwrap
++                        // below then killed the runner (`layered.rs:377`, exit 101) for
++                        // any app rewriting a file that shipped in its own repo.
++                        let lower_mode = self.lower.fd_file_status(&lower_fd).unwrap().mode;
+                         upper_fd = Some(
+-                            self.upper
+-                                .open(
+-                                    path,
+-                                    OFlags::CREAT | OFlags::WRONLY,
+-                                    self.lower.fd_file_status(&lower_fd).unwrap().mode,
+-                                )
+-                                .unwrap(),
++                            match self.upper.open(
++                                path,
++                                OFlags::CREAT | OFlags::WRONLY,
++                                lower_mode | Mode::WUSR,
++                            ) {
++                                Ok(fd) => fd,
++                                // The upper cannot hold this path at all: let an outer
++                                // layer take the migration (see `UpperCannotHoldPath`).
++                                Err(OpenError::ReadOnlyFileSystem) => {
++                                    let _ = self.lower.close(&lower_fd);
++                                    return Err(MigrationError::UpperCannotHoldPath);
++                                }
++                                Err(_) => {
++                                    let _ = self.lower.close(&lower_fd);
++                                    return Err(MigrationError::Io);
++                                }
++                            },
+                         );
+                     }
+                     let upper_fd = upper_fd.as_ref().unwrap();
+@@ -374,7 +405,12 @@ impl<Platform: sync::RawSyncPrimitivesProvider, Upper: super::FileSystem, Lower:
+         // levels without trouble.
+         for (internal_fd, position, flags, entry) in to_migrate {
+             // First, we set up the upper entry we'll be swapping/placing in.
+-            let upper_fd = self.upper.open(path, flags, Mode::empty()).unwrap();
++            // Fleet patch (hive): see the copy-up above -- a re-open that the upper
++            // layer refuses is reported, never unwrapped into a dead process.
++            let upper_fd = self
++                .upper
++                .open(path, flags, Mode::empty())
++                .map_err(|_| MigrationError::Io)?;
+             if position > 0 {
+                 self.upper
+                     .seek(
+@@ -680,7 +716,21 @@ impl<
+                     };
+                     if let Ok(FileType::Directory) = self.ensure_lower_contains(dirname) {
+                         // We must migrate the directories above, and then re-trigger the open
+-                        self.mkdir_migrating_ancestor_dirs(&path).unwrap();
++                        // Fleet patch (hive): a migration that cannot create the
++                        // ancestor in the upper layer is an ordinary open failure the
++                        // guest must see as an errno (EACCES/EROFS/EIO), never a runner
++                        // panic that kills the whole sandboxed process -- measured as
++                        // `layered.rs:683 NoWritePerms` unwrap, runner exit 101, on a
++                        // guest `touch` into its own application tree.
++                        self.mkdir_migrating_ancestor_dirs(&path)
++                            .map_err(|e| match e {
++                                MkdirError::NoWritePerms => OpenError::NoWritePerms,
++                                MkdirError::ReadOnlyFileSystem => OpenError::ReadOnlyFileSystem,
++                                MkdirError::Io => OpenError::Io,
++                                MkdirError::PathError(p) => OpenError::PathError(p),
++                                // The loop treats an already-present ancestor as success.
++                                MkdirError::AlreadyExists => OpenError::Io,
++                            })?;
+                         return self.open(path, flags, mode);
+                     }
+                     // Otherwise, handle-able by a lower level, fallthrough
+@@ -1424,11 +1474,17 @@ impl<
+         // If `to` shadows a lower-layer entry, place a tombstone over it -- otherwise a stale
+         // cached `EntryX::Lower` entry (from a previous open of `to` before this rename) would
+         // keep being returned by `open`, exactly as `unlink` guards against below.
++        // Fleet patch (hive): a tombstone is what `unlink` leaves when NO upper entry
++        // exists and the lower one must stay hidden. After a successful `upper.rename`
++        // an upper file exists at `to`, and `open`/`file_status` consult the cached
++        // tombstone BEFORE the upper layer -- so the tombstone made the freshly renamed
++        // file answer ENOENT to every non-`O_CREAT` open while `readdir` still listed
++        // it (measured on fc-sanjose: the write-tmp-then-`rename()` atomic-save idiom
++        // every JSON store uses "succeeded" and then lost its file). Dropping the stale
++        // cached entry is enough: the next lookup finds the upper file, which shadows
++        // the lower one exactly as the design doc describes.
+         if self.ensure_lower_contains(&to).is_ok() {
+-            self.root
+-                .write()
+-                .entries
+-                .insert(to, Arc::new(EntryX::Tombstone));
++            self.root.write().entries.remove(&to);
+         } else {
+             // No lower-layer shadowing, but there might still be a stale cached entry (e.g. an
+             // `EntryX::Upper` from a previous open of a *different* upper-layer file at the same
+diff --git a/litebox/src/fs/resolver.rs b/litebox/src/fs/resolver.rs
+index d84d9b5..c523118 100644
+--- a/litebox/src/fs/resolver.rs
++++ b/litebox/src/fs/resolver.rs
+@@ -102,6 +102,10 @@ impl Context {
+     }
+ 
+     fn can_execute(&self, permissions: &PermissionInfo) -> bool {
++        // Fleet patch (hive): CAP_DAC_OVERRIDE semantics for uid 0 -- see in_mem.rs.
++        if self.user_info.user == 0 {
++            return permissions.mode.intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH);
++        }
+         if self.user_info.user == permissions.owner.user {
+             permissions.mode.contains(Mode::XUSR)
+         } else if self.user_info.group == permissions.owner.group {
+@@ -112,6 +116,9 @@ impl Context {
+     }
+ 
+     fn can_read(&self, permissions: &PermissionInfo) -> bool {
++        if self.user_info.user == 0 {
++            return true;
++        }
+         if self.user_info.user == permissions.owner.user {
+             permissions.mode.contains(Mode::RUSR)
+         } else if self.user_info.group == permissions.owner.group {
+@@ -122,6 +129,9 @@ impl Context {
+     }
+ 
+     fn can_write(&self, permissions: &PermissionInfo) -> bool {
++        if self.user_info.user == 0 {
++            return true;
++        }
+         if self.user_info.user == permissions.owner.user {
+             permissions.mode.contains(Mode::WUSR)
+         } else if self.user_info.group == permissions.owner.group {
 diff --git a/litebox/src/net/mod.rs b/litebox/src/net/mod.rs
-index de31c04e..73016b0e 100644
+index 6dd9bb7..1d79326 100644
 --- a/litebox/src/net/mod.rs
 +++ b/litebox/src/net/mod.rs
-@@ -93,23 +93,35 @@ where
+@@ -93,13 +93,34 @@ where
      /// and the created `Network` handle is expected to be shared across all usage over the
      /// system.
      pub fn new(litebox: &LiteBox<Platform>) -> Self {
 +        Self::new_with_addrs(litebox, None, None)
 +    }
 +
-+    /// Same as [`Self::new`], but lets the caller override the interface/gateway
-+    /// addresses instead of the fixed `INTERFACE_IP_ADDR`/`GATEWAY_IP_ADDR`
-+    /// defaults (`None` = use the default). Needed by any caller that runs more
-+    /// than one `Network` on the same host at once (each one needs a distinct
-+    /// address to be independently reachable).
++    /// Same as [`Network::new`], but lets the caller override the guest's
++    /// own interface IP and default-gateway IP (falling back to the
++    /// module's hardcoded defaults when either is `None`). Every concurrent
++    /// litebox instance on a multi-tenant host otherwise believes it has the
++    /// IDENTICAL address (`INTERFACE_IP_ADDR`/`GATEWAY_IP_ADDR` are plain
++    /// constants, both still marked `// TODO: Make this configurable` by
++    /// upstream) -- unusable for a platform running many concurrent
++    /// sandboxed instances that each need their own reachable identity.
++    /// `litebox_runner_linux_userland::run` wires `LITEBOX_GUEST_IP`/
++    /// `LITEBOX_GATEWAY_IP` from the environment into this; unset = both
++    /// `None` = byte-identical to `Network::new`.
 +    pub fn new_with_addrs(
 +        litebox: &LiteBox<Platform>,
 +        interface_ip: Option<Ipv4Addr>,
@@ -32,6 +233,7 @@ index de31c04e..73016b0e 100644
                  24,
              )) {
                  Ok(()) => {}
+@@ -122,10 +143,7 @@ where
                  Err(_) => unreachable!(),
              }
          });
@@ -43,63 +245,92 @@ index de31c04e..73016b0e 100644
              Ok(None) => {}
              _ => unreachable!(),
          }
-@@ -1175,7 +1187,8 @@ where
-                 }
-                 socket_handle.tcp_mut().server_socket = Some(TcpServerSpecific {
-                     ip_listen_endpoint: smoltcp::wire::IpListenEndpoint {
--                        addr: Some(smoltcp::wire::IpAddress::Ipv4(*addr.ip())),
-+                        addr: (!addr.ip().is_unspecified())
-+                            .then(|| smoltcp::wire::IpAddress::Ipv4(*addr.ip())),
-                         port: new_port,
-                     },
-                     backlog: None,
-@@ -1188,7 +1201,8 @@ where
-                     .allocate_local_port(addr.port())
-                     .map_err(|_| BindError::PortAlreadyInUse(addr.port()))?;
-                 let local_endpoint = smoltcp::wire::IpListenEndpoint {
--                    addr: Some(smoltcp::wire::IpAddress::Ipv4(*addr.ip())),
-+                    addr: (!addr.ip().is_unspecified())
-+                            .then(|| smoltcp::wire::IpAddress::Ipv4(*addr.ip())),
-                     port: lp.port(),
-                 };
-                 let socket: &mut udp::Socket = self.socket_set.get_mut(socket_handle.handle);
-@@ -1261,7 +1275,7 @@ where
+@@ -1296,10 +1314,15 @@ where
+                         unimplemented!()
                      }
                      handle.server_socket = Some(TcpServerSpecific {
-                         ip_listen_endpoint: smoltcp::wire::IpListenEndpoint {
+-                        ip_listen_endpoint: smoltcp::wire::IpListenEndpoint {
 -                            addr: Some(smoltcp::wire::IpAddress::v4(0, 0, 0, 0)),
-+                            addr: None,
-                             port,
-                         },
+-                            port,
+-                        },
++                        // See the explicit-bind() TCP arm above and the UDP
++                        // arm's identical comment: an unspecified address
++                        // must map to smoltcp's true wildcard (`addr: None`),
++                        // not `Some(0.0.0.0)`, or inbound SYNs addressed to
++                        // the interface's real address are rejected. This is
++                        // the implicit-bind-on-listen() path (listen() called
++                        // with no prior explicit bind()), the one remaining
++                        // site using the wrong sentinel.
++                        ip_listen_endpoint: smoltcp::wire::IpListenEndpoint { addr: None, port },
                          backlog: None,
+                         socket_set_handles: vec![],
+                     });
 diff --git a/litebox_runner_linux_userland/src/lib.rs b/litebox_runner_linux_userland/src/lib.rs
-index 746469b5..890925e8 100644
+index dbbec41..4be5736 100644
 --- a/litebox_runner_linux_userland/src/lib.rs
 +++ b/litebox_runner_linux_userland/src/lib.rs
-@@ -313,7 +313,17 @@ pub fn run(cli_args: CliArgs) -> Result<()> {
+@@ -127,6 +127,14 @@ fn mmapped_file(path: impl AsRef<Path>) -> Result<MmappedFile> {
+ /// Can panic if any particulars of the environment are not set up as expected. Ideally, would not
+ /// panic. If it does actually panic, then ping the authors of LiteBox, and likely a better error
+ /// message could be thrown instead.
++/// Reads and parses an IPv4 address from the named environment variable.
++/// Unset or unparsable = `None` (never a panic — an operator typo in an
++/// optional override must not crash the runner; it falls back to litebox's
++/// own hardcoded default the same as if the var were absent).
++fn parse_ipv4_env(name: &str) -> Option<std::net::Ipv4Addr> {
++    std::env::var(name).ok()?.trim().parse().ok()
++}
++
+ pub fn run(cli_args: CliArgs) -> Result<()> {
+     tracing_subscriber::fmt()
+         .with_timer(tracing_subscriber::fmt::time::uptime())
+@@ -312,6 +320,27 @@ pub fn run(cli_args: CliArgs) -> Result<()> {
+             }
+         });
  
-     let initial_file_system = std::sync::Arc::new(initial_file_system);
++        // Fleet patch (hive): the guest runs as a single fixed non-root uid (1000),
++        // but the in-memory upper layer's root directory is created root-owned
++        // 0755 (`in_mem::RootDir::new`). Every write into a directory that only
++        // exists in the read-only tar layer (the application's own `/workspace`
++        // tree, its cwd) first has to migrate that directory's ancestors into
++        // this upper layer (`layered.rs::mkdir_migrating_ancestor_dirs`), and the
++        // very first migrated ancestor is created directly under `/` -- which
++        // the guest uid cannot write to. Measured on fc-sanjose 2026-09-09:
++        // `mkdir /workspace/server/data` -> EACCES and `open(O_CREAT)` in the
++        // same directory -> a `layered.rs:683` unwrap panic (runner exit 101),
++        // failing every deployment that creates a file at runtime (JSON stores,
++        // sqlite files, caches, uploads) the moment a node became Litebox; the
++        // pre-fork microsoft runner allowed these writes. The guest is the
++        // ONLY principal in this private in-memory tree (the sandbox boundary is
++        // seccomp + the syscall rewriter, never in-mem DAC), so a world-writable
++        // root protects nothing and denies the guest its own working tree.
++        in_mem.with_root_privileges(|fs| {
++            fs.chmod("/", Mode::RWXU | Mode::RWXG | Mode::RWXO)
++                .expect("chmod of the in-memory root must succeed under root privileges");
++        });
++
+         if let Some(resume_from) = &cli_args.resume_from {
+             import_writable_layer(&mut in_mem, resume_from)
+                 .unwrap_or_else(|e| panic!("failed to import --resume-from archive: {e}"));
+@@ -350,7 +379,12 @@ pub fn run(cli_args: CliArgs) -> Result<()> {
+             .unwrap_or_else(|e| panic!("failed to create {}: {e}", export_path.display()))
+     });
  
 -    let shim = shim_builder.build();
-+    // Per-invocation network identity override (fleet-hive patch): lets many
-+    // concurrent litebox processes on one host each own a distinct,
-+    // independently-reachable address instead of all defaulting to the same
-+    // hardcoded 10.0.0.2/10.0.0.1. Unset = identical to upstream behavior.
-+    let parse_ipv4_env = |name: &str| -> Option<core::net::Ipv4Addr> {
-+        std::env::var(name).ok()?.parse().ok()
-+    };
-+    let shim = shim_builder.build_with_net_config(
-+        parse_ipv4_env("LITEBOX_GUEST_IP"),
-+        parse_ipv4_env("LITEBOX_GATEWAY_IP"),
-+    );
++    // Per-invocation guest interface/gateway IP override, so many concurrent
++    // litebox instances on one multi-tenant host each get their own real,
++    // directly-routable address instead of all believing they are the
++    // hardcoded default (10.0.0.2/10.0.0.1). Unset = both None = byte-
++    // identical to `shim_builder.build()`.
++    let shim = shim_builder.build_with_net_config(parse_ipv4_env("LITEBOX_GUEST_IP"), parse_ipv4_env("LITEBOX_GATEWAY_IP"));
  
-     let shutdown = std::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
-     let net_worker = if cli_args.tun_device_name.is_some() {
+     // `--gui`: open a real host window and wire the guest's DRM page-flips into it. Mirrors
+     // `litebox_runner_linux_on_windows_userland`'s identical wiring -- see `presentation.rs`'s
 diff --git a/litebox_shim_linux/src/lib.rs b/litebox_shim_linux/src/lib.rs
-index a3bcb921..62fc0910 100644
+index f6fbf70..e495a94 100644
 --- a/litebox_shim_linux/src/lib.rs
 +++ b/litebox_shim_linux/src/lib.rs
-@@ -228,7 +228,19 @@ impl<Platform: ShimPlatform> LinuxShimBuilder<Platform> {
+@@ -275,7 +275,21 @@ impl<Platform: ShimPlatform> LinuxShimBuilder<Platform> {
  
      /// Build the shim.
      pub fn build<FS: ShimFS>(self) -> LinuxShim<Platform, FS> {
@@ -107,10 +338,12 @@ index a3bcb921..62fc0910 100644
 +        self.build_with_net_config(None, None)
 +    }
 +
-+    /// Same as [`Self::build`], but lets the caller override this instance's
-+    /// interface/gateway addresses (`None` = use `Network::new`'s default of
-+    /// `10.0.0.2`/`10.0.0.1`). Needed to run more than one shim on the same
-+    /// host at once, each independently reachable.
++    /// Same as [`Self::build`], but lets the caller override the guest's
++    /// interface IP and default-gateway IP (see
++    /// [`litebox::net::Network::new_with_addrs`]) — every concurrent litebox
++    /// instance on a multi-tenant host otherwise believes it has the
++    /// IDENTICAL guest address. `unset = None, None` is byte-identical to
++    /// `build()`.
 +    pub fn build_with_net_config<FS: ShimFS>(
 +        self,
 +        interface_ip: Option<core::net::Ipv4Addr>,

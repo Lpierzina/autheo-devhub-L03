@@ -244,6 +244,24 @@ pub static REGISTRY: &[SyncedStore] = &[
         },
     },
     SyncedStore {
+        name: "production_deployments",
+        // Same MERGE-not-replace shape as `projects`: tombstoned deletions,
+        // newest-`updated_ms`-per-row wins. Genuinely-empty is normal (no
+        // production deployments yet on a fresh fleet), never distinguished
+        // from "not synced yet" — the row-level merge already tolerates a
+        // legitimately-partial local set, unlike the wholesale-replace stores
+        // above that must decline an empty payload outright.
+        snapshot: |c| enc(&c.production_deployments.snapshot_synced()),
+        adopt: |c, b| {
+            let synced: crate::production_deployments::SyncedProductionDeployments =
+                serde_json::from_slice(b).ok()?;
+            if synced.rows.is_empty() && synced.tombstones.is_empty() {
+                return None;
+            }
+            Some(c.production_deployments.merge_synced(synced))
+        },
+    },
+    SyncedStore {
         name: "incidents",
         snapshot: |c| enc(&c.incidents.snapshot()),
         adopt: |c, b| {
@@ -336,6 +354,26 @@ pub static REGISTRY: &[SyncedStore] = &[
                 return None;
             }
             Some(c.databases.merge_synced(synced))
+        },
+    },
+    SyncedStore {
+        // Queue/consumer METADATA only — messages never ride this (node-local
+        // + GuardianDB-mirrored, see queues.rs's module doc). Same
+        // empty-payload guard as `databases`: a fully-empty snapshot means
+        // "the leader hasn't published anything yet", never "delete
+        // everything" — tombstones carry deletions explicitly.
+        name: "queues",
+        snapshot: |c| enc(&c.queues.snapshot_synced()),
+        adopt: |c, b| {
+            let synced: crate::queues::SyncedQueues = serde_json::from_slice(b).ok()?;
+            if synced.queues.is_empty()
+                && synced.consumers.is_empty()
+                && synced.queue_tombstones.is_empty()
+                && synced.consumer_tombstones.is_empty()
+            {
+                return None;
+            }
+            Some(c.queues.merge_synced(synced))
         },
     },
     SyncedStore {
@@ -581,6 +619,7 @@ pub static MERGE_STORES: &[&str] = &[
     "browser_presence",
     "projects",
     "teams",
+    "production_deployments",
 ];
 
 /// Rate-limit config wire shape — deliberately config-only (see the registry
