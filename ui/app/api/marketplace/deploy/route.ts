@@ -9,8 +9,6 @@ import {
 import { authTokenFrom, backend } from "@/lib/gitops-server";
 import { marketplaceDeploymentUrl } from "@/lib/marketplace-deployment-server";
 
-export const dynamic = "force-dynamic";
-
 const PROJECT = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 

@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
 const FALLBACK_PAIR = "0x182be47742b81777055d69c50e5c9d2fe803e938";
 const STALE_MS = 5 * 60_000;
 const MAX_STALE_MS = 15 * 60_000;
