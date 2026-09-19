@@ -4648,9 +4648,9 @@ async fn run_build(
             }
         }
     };
-    // Failed candidates remain non-routable error records. Successful candidates
-    // are hidden until a real launch/response receipt is written ahead to the
-    // deployment ledger; production alias movement is a second transaction.
+    // A failed production build must register as an error without moving the
+    // live production alias away from its last known-good deployment.
+    let flip_production = is_production && !build_failed;
     if is_production && build_failed {
         log(
             "Build failed — the current production deployment keeps serving; this build is recorded as an error and publishes no route."
@@ -4678,7 +4678,7 @@ async fn run_build(
         if build_failed {
             DeployState::Error
         } else {
-            crate::deployment_ledger::SourceKind::Git
+            DeployState::Ready
         },
         tenant.clone(),
         incarnation,
@@ -5755,7 +5755,20 @@ async fn mirror_remote_build(
 ) -> TargetOutcome {
     let mut mirrored = 0usize;
     let mut polls_failed = 0usize;
-    let deadline = now_ms() + 10 * 60 * 1000; // 10 min cap
+    // A successful state read resets the inactivity window. The separate
+    // ceiling still bounds a target that remains Building forever.
+    let idle_window_ms = std::env::var("HIVE_BUILD_MIRROR_IDLE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(10 * 60 * 1000);
+    let ceiling_ms = std::env::var("HIVE_BUILD_MIRROR_MAX_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(120 * 60 * 1000);
+    let started = now_ms();
+    let mut deadline = started + idle_window_ms;
     // AUTH FOR THE POLL, not just the dispatch. `/v1/builds/:id` is
     // team-scoped (`admin::build_owned_by`) and this poll carried NEITHER
     // `?team=` nor `?tok=`, so on the RECEIVING node `team_claims`/
