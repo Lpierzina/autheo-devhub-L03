@@ -58,6 +58,7 @@ mod inference;
 mod integrations;
 mod integrity_signer;
 mod lease;
+mod listener_audit;
 mod marketplace;
 mod memwatch;
 mod mesh_raw;
