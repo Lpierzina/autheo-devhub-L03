@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { marketplaceDeploymentConfigured } from "@/lib/marketplace-deployment-server";
 
-export const dynamic = "force-dynamic";
-
 /** Configuration presence only: never disclose the Marketplace URL or credentials. */
 export async function GET() {
   return NextResponse.json({

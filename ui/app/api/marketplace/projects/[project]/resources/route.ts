@@ -6,8 +6,6 @@ import {
   listMarketplaceProjectResources,
 } from "@/lib/marketplace-project-resources";
 
-export const dynamic = "force-dynamic";
-
 const PROJECT = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 
 function projectId(value: string): string {
