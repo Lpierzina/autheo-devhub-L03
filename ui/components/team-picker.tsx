@@ -12,7 +12,7 @@ import { usePoll, type Team } from "@/lib/api";
 //
 // `value` is the `currentTeam()`-style id: "personal" or an org slug.
 
-const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkEnabled = typeof process !== "undefined" && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 const selectCls =
   "w-full appearance-none rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-border-strong focus:outline-none";

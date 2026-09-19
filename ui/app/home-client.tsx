@@ -15,6 +15,7 @@ import {
 import { timeAgo } from "@/lib/utils";
 import { deploymentHost, deploymentSelfAlias } from "@/lib/deploy-url";
 import { RawPortsBadge } from "@/components/raw-port-connections";
+import { SecurityProfileBanner } from "@/components/security-profile";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Landing, OpeningSplash } from "@/components/landing";
 import { useSettledAuth, resetAuthSettle } from "@/lib/auth-settle";
@@ -23,7 +24,7 @@ type View = "grid" | "list";
 
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
-const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkEnabled = typeof process !== "undefined" && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 // The root route body (client): the public Shadow landing for signed-out
 // visitors, the dashboard for signed-in users. In local (no-Clerk) mode it's just
@@ -180,6 +181,7 @@ function Dashboard() {
         <h1 className="mb-6 text-3xl font-semibold tracking-tight text-accent sm:text-4xl">
           Autheo Development Hub
         </h1>
+        <SecurityProfileBanner />
         {/* Toolbar */}
         <div className="mb-6 flex items-center gap-2">
         <div className="relative flex-1">

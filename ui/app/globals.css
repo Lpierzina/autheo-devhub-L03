@@ -107,6 +107,106 @@ body {
     linear-gradient(to bottom, hsl(var(--foreground) / 0.015) 1px, transparent 1px);
 }
 
+/* ---- Dashboard globe ----
+   This is scoped to .globe-3d. It deliberately does not touch body background
+   sizing or positioning: the workshop illustration remains exactly as served
+   before the globe was introduced. */
+.globe-3d {
+  --globe-line: hsl(var(--accent) / 0.32);
+  --globe-fill: hsl(var(--accent) / 0.05);
+  position: relative;
+  display: grid;
+  place-items: center;
+  perspective: 720px;
+  isolation: isolate;
+}
+.globe-3d-sphere {
+  position: relative;
+  width: 78%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--globe-line);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 33% 28%, hsl(var(--accent) / 0.14), transparent 34%),
+    var(--globe-fill);
+  box-shadow: inset -24px -18px 36px hsl(var(--accent) / 0.07), 0 0 42px hsl(var(--accent) / 0.08);
+  transform-style: preserve-3d;
+  animation: globe-turn 16s linear infinite;
+}
+.globe-3d-grid {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+.globe-3d-latitude,
+.globe-3d-longitude {
+  position: absolute;
+  display: block;
+  border: 1px solid var(--globe-line);
+}
+.globe-3d-latitude {
+  left: 3%;
+  width: 94%;
+  height: 24%;
+  border-radius: 50%;
+}
+.globe-3d-latitude-0 { top: 5%; transform: scaleX(0.58); }
+.globe-3d-latitude-1 { top: 22%; transform: scaleX(0.82); }
+.globe-3d-latitude-2 { top: 38%; }
+.globe-3d-latitude-3 { top: 54%; transform: scaleX(0.82); }
+.globe-3d-latitude-4 { top: 71%; transform: scaleX(0.58); }
+.globe-3d-longitude {
+  top: 2%;
+  height: 96%;
+  width: 34%;
+  border-radius: 50%;
+  transform: rotateY(50deg);
+}
+.globe-3d-longitude-0 { left: -3%; }
+.globe-3d-longitude-1 { left: 14%; }
+.globe-3d-longitude-2 { left: 33%; }
+.globe-3d-longitude-3 { left: 52%; }
+.globe-3d-longitude-4 { left: 69%; }
+.globe-3d-glow {
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  background: radial-gradient(circle, hsl(var(--accent) / 0.18), transparent 68%);
+  filter: blur(13px);
+  transform: translateZ(12px);
+}
+.globe-3d-orbit {
+  position: absolute;
+  width: 108%;
+  height: 32%;
+  border: 1px solid hsl(var(--accent) / 0.24);
+  border-radius: 50%;
+  transform: rotateX(68deg) rotateZ(-20deg);
+  animation: globe-orbit 8s linear infinite;
+}
+.globe-3d-orbit-b {
+  width: 122%;
+  height: 44%;
+  animation-delay: -4s;
+  animation-direction: reverse;
+  opacity: 0.6;
+}
+@keyframes globe-turn {
+  from { transform: rotateY(0deg) rotateX(7deg); }
+  to { transform: rotateY(360deg) rotateX(7deg); }
+}
+@keyframes globe-orbit {
+  from { transform: rotateX(68deg) rotateZ(-20deg); }
+  to { transform: rotateX(68deg) rotateZ(340deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .globe-3d-sphere,
+  .globe-3d-orbit {
+    animation: none;
+  }
+}
+
 * {
   border-color: hsl(var(--border));
 }

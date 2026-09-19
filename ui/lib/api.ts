@@ -19,7 +19,7 @@ const BASE = "/cloud";
  * (`localhost`/`127.0.0.1`) falls back to this browser's own admin port.
  */
 export function wsBase(): string {
-  const configured = process.env.NEXT_PUBLIC_HIVE_WS_ADMIN;
+  const configured = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_HIVE_WS_ADMIN : undefined;
   if (configured) return configured.replace(/\/$/, "");
   if (typeof window === "undefined") return "";
   const { protocol, hostname } = window.location;
@@ -45,13 +45,13 @@ export function wsBase(): string {
  * the pre-auth window; a `hive-team-changed` event fires when the id lands and
  * pollers re-fetch under the correct namespace. With Clerk disabled (local
  * single-user dev) plain "personal" is correct. */
-const CLERK_ON = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const CLERK_ON = typeof process !== "undefined" && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 // Dev-mint (bn-local-dev-clerk-hydration-gap): with the auth bypass on and no
 // Clerk keys, /api/token mints a LOCAL JWT for the requested team, so local
 // full-page testing exercises the real mint→cookie→JWT-tenant path instead of
 // the anonymous/empty tenant. MINT_ON gates the same auto-mint paths CLERK_ON
 // does (session keeper + 401/403 re-mint).
-const DEV_MINT = process.env.NEXT_PUBLIC_HIVE_DEV_MINT === "1";
+const DEV_MINT = typeof process !== "undefined" && process.env.NEXT_PUBLIC_HIVE_DEV_MINT === "1";
 const MINT_ON = CLERK_ON || DEV_MINT;
 
 export function currentTeam(): string {

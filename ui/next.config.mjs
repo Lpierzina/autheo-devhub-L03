@@ -56,6 +56,12 @@ const CLERK_CSP_ORIGINS = (() => {
 })();
 
 const nextConfig = {
+  // The Cloud browser reaches the local server through 127.0.0.1 while the
+  // dev server initializes as localhost. Next 16 blocks its dev chunks across
+  // that hostname boundary unless it is explicitly allowed, leaving the app
+  // shell permanently unhydrated even though the document itself returns 200.
+  allowedDevOrigins: ["127.0.0.1"],
+
   // Keep Turbopack's module graph and cache rooted at this application. The
   // repository has a second lockfile at its root; allowing automatic workspace
   // discovery makes dev chunks span both roots and can leave a stale/truncated
