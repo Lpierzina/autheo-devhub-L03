@@ -1207,6 +1207,7 @@ impl Gateway {
             state,
             tenant,
             None,
+            true,
             None,
         )
     }
@@ -1269,6 +1270,7 @@ impl Gateway {
             state,
             tenant,
             Some(project_incarnation),
+            true,
             marketplace_placement,
         )
     }
@@ -1327,6 +1329,7 @@ impl Gateway {
             tenant,
             project_incarnation,
             false,
+            None,
         );
         if info.state != fluid_core::DeployState::Building {
             self.discard_unpublished_record(&info.id);
@@ -1355,6 +1358,7 @@ impl Gateway {
         mut state: fluid_core::DeployState,
         tenant: String,
         project_incarnation: Option<ProjectIncarnation>,
+        publish_routes: bool,
         marketplace_placement: Option<fluid_core::MarketplacePlacementSnapshot>,
     ) -> DeploymentInfo {
         // Normalize the owner once at the boundary so the stored record, the
