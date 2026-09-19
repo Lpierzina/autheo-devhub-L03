@@ -18,7 +18,7 @@ const ADMIN_EMAILS = new Set([
   "dylan@weave.cloud",
 ]);
 
-const clerkOn = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkOn = typeof process !== "undefined" && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 /** Inner hook — only ever called when Clerk is enabled (provider mounted). */
 function useOwnerViaClerk(): boolean {

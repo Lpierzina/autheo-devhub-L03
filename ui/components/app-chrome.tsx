@@ -43,7 +43,7 @@ const CommandBar = dynamic(() => import("@/components/command-bar").then((m) => 
 // happen (login/logout reactivity this file's history depends on — navbar
 // appears after login, disappears after logout, without a hard refresh); they
 // are just debounced and bounded instead of tracking every oscillation.
-const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkEnabled = typeof process !== "undefined" && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 export function ChromeTop() {
   if (!clerkEnabled) return <TopNav />;
@@ -70,7 +70,7 @@ export function ChromeBottom() {
             cookie-mint component the Clerk path uses when the local dev-mint
             flag is on, so the hive_jwt cookie re-mints on its 50-minute cadence
             and the 401-remint path is exercised locally too. */}
-        {process.env.NEXT_PUBLIC_HIVE_DEV_MINT === "1" && <SessionToken />}
+        {typeof process !== "undefined" && process.env.NEXT_PUBLIC_HIVE_DEV_MINT === "1" && <SessionToken />}
       </>
     );
   }

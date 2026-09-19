@@ -13,13 +13,13 @@
 // This way one build serves both contexts correctly — a localhost session never
 // hands out tunnel URLs and vice-versa.
 
-const DEPLOY_DOMAIN = (process.env.NEXT_PUBLIC_DEPLOYMENT_DOMAIN || "").trim().replace(/^\.+|\.+$/g, "");
+const DEPLOY_DOMAIN = ((typeof process !== "undefined" && process.env.NEXT_PUBLIC_DEPLOYMENT_DOMAIN) || "").trim().replace(/^\.+|\.+$/g, "");
 
 // Ingress mode (mirrors the node's HIVE_INGRESS): "dns" (default — ngrok is
 // retired) emits plain `<sub>.<apps-domain>` — Vercel-DNS wildcards match ONE
 // label, and regional steering happens inside the edge after connect, not in
 // the hostname. "ngrok"/"dual" remain accepted as explicit break-glass values.
-const INGRESS = (process.env.NEXT_PUBLIC_INGRESS || "dns").trim().toLowerCase();
+const INGRESS = ((typeof process !== "undefined" && process.env.NEXT_PUBLIC_INGRESS) || "dns").trim().toLowerCase();
 
 /** True for any host that is the local machine (localhost, *.localhost, loopback IPs). */
 function isLocalHostname(h: string): boolean {
@@ -120,7 +120,7 @@ export function rawPortAddress(alias: string | undefined | null, publicPort: num
 // ---- EXPERIMENT: anonymous preview access (NEXT_PUBLIC_ZKAUTH=1) ----
 
 /** Whether the anonymous-membership preview flow is enabled in the UI. */
-export const zkEnabled = process.env.NEXT_PUBLIC_ZKAUTH === "1";
+export const zkEnabled = typeof process !== "undefined" && process.env.NEXT_PUBLIC_ZKAUTH === "1";
 
 /**
  * Open a deployment. With the zkauth experiment on, this first asks the home node

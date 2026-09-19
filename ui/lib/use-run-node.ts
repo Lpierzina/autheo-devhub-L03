@@ -45,7 +45,7 @@ const DEFAULT_RELAYS = [
   "https://fc-bangkok.relay.shadw.app:3343",
   "https://fc-virginia.relay.shadw.app:3343",
 ].join(",");
-const RELAY = process.env.NEXT_PUBLIC_HIVE_BROWSER_RELAY || DEFAULT_RELAYS;
+const RELAY = (typeof process !== "undefined" && process.env.NEXT_PUBLIC_HIVE_BROWSER_RELAY) || DEFAULT_RELAYS;
 
 /** The page half of the browser↔browser direct lane (bn-browser-peer-webrtc-mesh).
  *

@@ -24,7 +24,7 @@ type View = "grid" | "list";
 
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
-const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkEnabled = typeof process !== "undefined" && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 // The root route body (client): the public Shadow landing for signed-out
 // visitors, the dashboard for signed-in users. In local (no-Clerk) mode it's just

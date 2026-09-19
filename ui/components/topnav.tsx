@@ -17,7 +17,7 @@ import { useIsPlatformOwner } from "@/lib/owner";
 import { marketplaceUrl } from "@/lib/marketplace";
 import { WalletConnectionButton } from "@/components/wallet-connection";
 
-const clerkOn = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkOn = typeof process !== "undefined" && !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 // Team/account-level tabs — shown when NO project/deployment is selected.
 const teamTabs = [
