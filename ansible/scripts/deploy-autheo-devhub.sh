@@ -166,8 +166,9 @@ deploy_log="$(mktemp)"
 if ! env ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${playbook_cmd[@]}" 2>&1 | tee "$deploy_log"; then
   die "Autheo Dev Hub deployment failed; no success verification was accepted"
 fi
-grep -Fq 'AUTHEO DEV HUB VERIFIED (:3001)' "$deploy_log" ||
+if ! grep -Fq 'AUTHEO DEV HUB VERIFIED (:3001)' "$deploy_log"; then
   die "deployment ended without the required AUTHEO DEV HUB VERIFIED (:3001) result"
+fi
 
 cat <<'EOF'
 Autheo Dev Hub deployment verified. On the elected Dev Hub host, follow up with:
