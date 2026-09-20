@@ -119,7 +119,7 @@ vault_cmd+=("$VAULT_FILE")
 vault_error="$(mktemp)"
 trap 'rm -f "$vault_error" "${deploy_log:-}"' EXIT
 if ! (cd "$ANSIBLE_DIR" &&
-  ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${vault_cmd[@]}" >/dev/null 2>"$vault_error); then
+  ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${vault_cmd[@]}" >/dev/null 2>"$vault_error"); then
   if grep -Eq 'password file.*(not found|does not exist)' "$vault_error"; then
     die "vault password source is missing. Restore the configured pre-existing password file or pass --vault-password-file PATH."
   fi
