@@ -1,0 +1,16 @@
+---
+# The primary Autheo Development Hub is a separate Next.js service from the
+# fleet dashboard (`hive-ui`, :3002). It is deliberately opt-in while nodes
+# transition from manually-managed releases.
+autheo_devhub_enabled: false
+autheo_devhub_repo: "https://github.com/ThothDivision/L0_devhub_deploy.git"
+autheo_devhub_version: "main"
+autheo_devhub_install_dir: "/opt/autheo-devhub"
+autheo_devhub_port: 3001
+autheo_devhub_service_name: "autheo-devhub"
+
+# L0_devhub_deploy is the platform repository; the independently runnable
+# Next.js application is its ui/ subtree, as identified by ui/package-lock.json
+# and ui/next.config.mjs.
+autheo_devhub_source_subdir: "ui"
+autheo_devhub_stage_root: "/var/lib/hive/autheo-devhub-staging"

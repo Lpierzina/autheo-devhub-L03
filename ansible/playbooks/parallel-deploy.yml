@@ -405,6 +405,19 @@
       delegate_to: localhost
       become: false
 
+- name: Primary Autheo Development Hub deployment (:3001)
+  # The hub is intentionally a distinct service from the fleet dashboard.
+  # ui_builder is elected from hive_cp_owner_chain above, so this follows the
+  # existing control-plane/UI placement instead of hard-coding Genesis or any
+  # host name. The role is opt-in via autheo_devhub_enabled.
+  hosts: ui_builder
+  become: true
+  tags: [autheo_devhub]
+  tasks:
+    - name: Deploy the primary Autheo Development Hub
+      ansible.builtin.include_role:
+        name: autheo_devhub
+
 - name: Clean up the control host's scratch artifact directory
   hosts: localhost
   connection: local

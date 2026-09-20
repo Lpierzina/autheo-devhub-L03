@@ -1,0 +1,414 @@
+---
+# The primary Dev Hub deliberately has no dependency on hive_ui_fanout: that
+# role publishes the fleet dashboard at :3002 from hive_src_dir/ui with a
+# hive-specific generated environment. Dev Hub is the separately versioned
+# source/ref requested below and is served only by the elected ui_builder
+# (the control-plane owner selected in parallel-deploy.yml).
+
+- name: Skip Autheo Dev Hub when it is not enabled
+  ansible.builtin.meta: end_host
+  when: not (autheo_devhub_enabled | bool)
+  tags: [autheo_devhub]
+
+- name: Require an Autheo Dev Hub repository and version
+  ansible.builtin.assert:
+    that:
+      - autheo_devhub_repo | length > 0
+      - autheo_devhub_version | length > 0
+      - autheo_devhub_install_dir | length > 1
+    fail_msg: >-
+      autheo_devhub_repo, autheo_devhub_version, and
+      autheo_devhub_install_dir must be non-empty.
+  tags: [autheo_devhub]
+
+- name: Ensure the Dev Hub staging root exists
+  ansible.builtin.file:
+    path: "{{ autheo_devhub_stage_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [autheo_devhub]
+
+- name: Create an isolated Dev Hub source staging directory
+  ansible.builtin.tempfile:
+    state: directory
+    path: "{{ autheo_devhub_stage_root }}"
+    prefix: source-
+  register: _autheo_devhub_source_stage
+  tags: [autheo_devhub]
+
+- name: Obtain the requested Dev Hub source and ref
+  ansible.builtin.git:
+    repo: "{{ autheo_devhub_repo }}"
+    dest: "{{ _autheo_devhub_source_stage.path }}/repo"
+    version: "{{ autheo_devhub_version }}"
+    depth: 1
+    single_branch: true
+    force: true
+  tags: [autheo_devhub]
+
+- name: Read the resolved Dev Hub source revision
+  ansible.builtin.command:
+    cmd: git rev-parse HEAD
+    chdir: "{{ _autheo_devhub_source_stage.path }}/repo"
+  register: _autheo_devhub_revision
+  changed_when: false
+  tags: [autheo_devhub]
+
+- name: Require the Dev Hub's Next.js application source
+  ansible.builtin.stat:
+    path: "{{ _autheo_devhub_source_stage.path }}/repo/{{ item }}"
+  loop:
+    - "{{ autheo_devhub_source_subdir }}/package.json"
+    - "{{ autheo_devhub_source_subdir }}/package-lock.json"
+    - "{{ autheo_devhub_source_subdir }}/next.config.mjs"
+  register: _autheo_devhub_source_files
+  tags: [autheo_devhub]
+
+- name: Assert the checked out source has the locked Next.js application
+  ansible.builtin.assert:
+    that:
+      - _autheo_devhub_source_files.results | map(attribute='stat.exists') | min
+    fail_msg: >-
+      {{ autheo_devhub_repo }} at {{ autheo_devhub_version }} does not contain
+      the expected locked Next.js application under
+      {{ autheo_devhub_source_subdir }}/. Refusing to publish an unknown
+      runtime layout.
+  tags: [autheo_devhub]
+
+- name: Read the installed Dev Hub release identity when present
+  ansible.builtin.shell:
+    cmd: >-
+      test -f {{ autheo_devhub_install_dir | quote }}/.autheo-devhub-release &&
+      sed -n 's/^source_revision=//p' {{ autheo_devhub_install_dir | quote }}/.autheo-devhub-release ||
+      true
+    executable: /bin/bash
+  register: _autheo_devhub_installed_revision
+  changed_when: false
+  tags: [autheo_devhub]
+
+- name: Decide whether this source revision needs publication
+  ansible.builtin.set_fact:
+    autheo_devhub_publish: >-
+      {{ (_autheo_devhub_installed_revision.stdout | trim) !=
+         (_autheo_devhub_revision.stdout | trim) }}
+  tags: [autheo_devhub]
+
+- name: Announce an already-published Dev Hub release
+  ansible.builtin.debug:
+    msg: >-
+      Autheo Dev Hub source {{ _autheo_devhub_revision.stdout | trim }} is
+      already installed; validating the running :{{ autheo_devhub_port }}
+      service without rebuilding or restarting it.
+  when: not (autheo_devhub_publish | bool)
+  tags: [autheo_devhub]
+
+- name: Install locked Dev Hub dependencies
+  ansible.builtin.command:
+    cmd: npm ci
+    chdir: "{{ _autheo_devhub_source_stage.path }}/repo/{{ autheo_devhub_source_subdir }}"
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:{{ ansible_env.PATH }}"
+  async: 900
+  poll: 15
+  when: autheo_devhub_publish | bool
+  tags: [autheo_devhub]
+
+- name: Build the Dev Hub production Next.js release
+  # Next.js inlines NEXT_PUBLIC_* values at build time. Read the existing
+  # root-only runtime environment into this child process without copying its
+  # file into either checkout or release; no_log prevents accidental disclosure
+  # if a dependency prints its environment during a failed build.
+  ansible.builtin.shell: |
+    set -a
+    if [ -r /etc/autheo-devhub.env ]; then
+      . /etc/autheo-devhub.env
+    fi
+    set +a
+    export NODE_ENV=production
+    exec npm run build
+  args:
+    chdir: "{{ _autheo_devhub_source_stage.path }}/repo/{{ autheo_devhub_source_subdir }}"
+    executable: /bin/bash
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin:{{ ansible_env.PATH }}"
+  async: 900
+  poll: 15
+  when: autheo_devhub_publish | bool
+  no_log: true
+  tags: [autheo_devhub]
+
+- name: Read the canonical Dev Hub BUILD_ID
+  ansible.builtin.command:
+    cmd: cat .next/BUILD_ID
+    chdir: "{{ _autheo_devhub_source_stage.path }}/repo/{{ autheo_devhub_source_subdir }}"
+  register: _autheo_devhub_built_build_id
+  changed_when: false
+  when: autheo_devhub_publish | bool
+  tags: [autheo_devhub]
+
+- name: Require the complete Dev Hub runtime artifact
+  ansible.builtin.stat:
+    path: "{{ _autheo_devhub_source_stage.path }}/repo/{{ autheo_devhub_source_subdir }}/{{ item }}"
+  loop:
+    - ".next/BUILD_ID"
+    - "package.json"
+    - "node_modules/.bin/next"
+  register: _autheo_devhub_runtime_files
+  when: autheo_devhub_publish | bool
+  tags: [autheo_devhub]
+
+- name: Assert the built Dev Hub has all required runtime files
+  ansible.builtin.assert:
+    that:
+      - _autheo_devhub_runtime_files.results | map(attribute='stat.exists') | min
+    fail_msg: >-
+      Dev Hub build completed without its required Next.js runtime artifact;
+      the current {{ autheo_devhub_install_dir }} release was not modified.
+  when: autheo_devhub_publish | bool
+  tags: [autheo_devhub]
+
+- name: Create a same-filesystem Dev Hub release directory
+  ansible.builtin.tempfile:
+    state: directory
+    path: "{{ autheo_devhub_install_dir | dirname }}"
+    prefix: ".autheo-devhub-release-"
+  register: _autheo_devhub_release_stage
+  when: autheo_devhub_publish | bool
+  tags: [autheo_devhub]
+
+- name: Stage the complete Dev Hub runtime release
+  ansible.builtin.command:
+    cmd: >-
+      rsync -a --delete --exclude=.git --exclude=.env --exclude=.env.* --
+      {{ (_autheo_devhub_source_stage.path ~ '/repo/' ~ autheo_devhub_source_subdir ~ '/') | quote }}
+      {{ (_autheo_devhub_release_stage.path ~ '/') | quote }}
+  when: autheo_devhub_publish | bool
+  tags: [autheo_devhub]
+
+- name: Write the staged Dev Hub release identity
+  ansible.builtin.copy:
+    dest: "{{ _autheo_devhub_release_stage.path }}/.autheo-devhub-release"
+    content: |
+      source_revision={{ _autheo_devhub_revision.stdout | trim }}
+      build_id={{ _autheo_devhub_built_build_id.stdout | trim }}
+    owner: root
+    group: root
+    mode: "0644"
+  when: autheo_devhub_publish | bool
+  tags: [autheo_devhub]
+
+- name: Preserve an existing Dev Hub environment file
+  ansible.builtin.stat:
+    path: /etc/autheo-devhub.env
+  register: _autheo_devhub_env
+  no_log: true
+  tags: [autheo_devhub]
+
+- name: Create an empty Dev Hub environment file only when absent
+  ansible.builtin.copy:
+    dest: /etc/autheo-devhub.env
+    content: ""
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  when: not _autheo_devhub_env.stat.exists
+  no_log: true
+  tags: [autheo_devhub]
+
+- name: Locate the node binary for the Dev Hub service PATH
+  ansible.builtin.shell: |
+    set -u
+    p="$(command -v node 2>/dev/null || true)"
+    if [ -z "$p" ]; then
+      for c in /usr/local/bin/node /usr/bin/node /opt/node/bin/node; do
+        [ -x "$c" ] && { p="$c"; break; }
+      done
+    fi
+    printf '%s' "$p"
+  args:
+    executable: /bin/bash
+  register: _autheo_devhub_node_which
+  changed_when: false
+  failed_when: false
+  tags: [autheo_devhub]
+
+- name: Require node on the Dev Hub host
+  ansible.builtin.assert:
+    that:
+      - (_autheo_devhub_node_which.stdout | trim) | length > 0
+    fail_msg: >-
+      node was not found on {{ inventory_hostname }}, so
+      {{ autheo_devhub_service_name }} cannot start.
+  tags: [autheo_devhub]
+
+- name: Record the node directory for the Dev Hub unit
+  ansible.builtin.set_fact:
+    autheo_devhub_node_dir: "{{ (_autheo_devhub_node_which.stdout | trim) | dirname }}"
+  tags: [autheo_devhub]
+
+- name: Record the pre-deploy Dev Hub service identity
+  ansible.builtin.shell: |
+    printf 'pid=%s\n' "$(systemctl show -p MainPID --value {{ autheo_devhub_service_name }} || true)"
+    printf 'start_usec=%s\n' "$(systemctl show -p ExecMainStartTimestampMonotonic --value {{ autheo_devhub_service_name }} || true)"
+  args:
+    executable: /bin/bash
+  register: _autheo_devhub_before_service
+  changed_when: false
+  tags: [autheo_devhub]
+
+- name: Template the Autheo Dev Hub systemd unit
+  ansible.builtin.template:
+    src: autheo-devhub.service.j2
+    dest: "/etc/systemd/system/{{ autheo_devhub_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: _autheo_devhub_unit
+  tags: [autheo_devhub]
+
+- name: Reload systemd when the Dev Hub unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _autheo_devhub_unit.changed
+  tags: [autheo_devhub]
+
+- name: Publish and verify the Dev Hub release
+  block:
+    - name: Atomically publish the staged Dev Hub release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        install_dir={{ autheo_devhub_install_dir | quote }}
+        staged_dir={{ _autheo_devhub_release_stage.path | quote }}
+        previous_dir="${install_dir}.previous"
+        test -f "${staged_dir}/.next/BUILD_ID"
+        test -x "${staged_dir}/node_modules/.bin/next"
+        rm -rf "${previous_dir}"
+        if [ -d "${install_dir}" ]; then
+          mv "${install_dir}" "${previous_dir}"
+        fi
+        mv "${staged_dir}" "${install_dir}"
+      args:
+        executable: /bin/bash
+      when: autheo_devhub_publish | bool
+      tags: [autheo_devhub]
+
+    - name: Restart Dev Hub only when its release or unit changed
+      ansible.builtin.systemd:
+        name: "{{ autheo_devhub_service_name }}"
+        state: restarted
+        enabled: true
+        daemon_reload: true
+      when: (autheo_devhub_publish | bool) or _autheo_devhub_unit.changed
+      tags: [autheo_devhub]
+
+    - name: Ensure the unchanged Dev Hub service remains enabled and started
+      ansible.builtin.systemd:
+        name: "{{ autheo_devhub_service_name }}"
+        state: started
+        enabled: true
+      when: not ((autheo_devhub_publish | bool) or _autheo_devhub_unit.changed)
+      tags: [autheo_devhub]
+
+    - name: Read the installed Dev Hub BUILD_ID and release identity
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ autheo_devhub_install_dir | quote }}
+        build_id="$(cat .next/BUILD_ID)"
+        source_revision="$(sed -n 's/^source_revision=//p' .autheo-devhub-release)"
+        printf '%s\n%s\n' "$build_id" "$source_revision"
+      args:
+        executable: /bin/bash
+      register: _autheo_devhub_installed_identity
+      changed_when: false
+      tags: [autheo_devhub]
+
+    - name: Assert the installed release is the source revision built for this run
+      ansible.builtin.assert:
+        that:
+          - (_autheo_devhub_installed_identity.stdout_lines[1] | trim) == (_autheo_devhub_revision.stdout | trim)
+          - not (autheo_devhub_publish | bool) or
+            (_autheo_devhub_installed_identity.stdout_lines[0] | trim) == (_autheo_devhub_built_build_id.stdout | trim)
+        fail_msg: >-
+          Installed Dev Hub release identity differs from the requested source
+          revision or the BUILD_ID built in this run.
+      tags: [autheo_devhub]
+
+    - name: Verify the Dev Hub service is active after publication
+      ansible.builtin.command:
+        cmd: "systemctl is-active {{ autheo_devhub_service_name }}"
+      register: _autheo_devhub_active
+      changed_when: false
+      failed_when: _autheo_devhub_active.stdout | trim != 'active'
+      tags: [autheo_devhub]
+
+    - name: Read the post-deploy Dev Hub service identity
+      ansible.builtin.shell: |
+        printf 'pid=%s\n' "$(systemctl show -p MainPID --value {{ autheo_devhub_service_name }})"
+        printf 'start_usec=%s\n' "$(systemctl show -p ExecMainStartTimestampMonotonic --value {{ autheo_devhub_service_name }})"
+      args:
+        executable: /bin/bash
+      register: _autheo_devhub_after_service
+      changed_when: false
+      tags: [autheo_devhub]
+
+    - name: Assert a newly published Dev Hub release actually restarted
+      ansible.builtin.assert:
+        that:
+          - >-
+            not (autheo_devhub_publish | bool) or
+            ((_autheo_devhub_after_service.stdout_lines[1].split('=', 1)[1] | int) >
+             (_autheo_devhub_before_service.stdout_lines[1].split('=', 1)[1] | default('0') | int))
+        fail_msg: >-
+          {{ autheo_devhub_service_name }} did not restart after publication:
+          before={{ _autheo_devhub_before_service.stdout | replace('\n', ', ') }},
+          after={{ _autheo_devhub_after_service.stdout | replace('\n', ', ') }}.
+      tags: [autheo_devhub]
+
+    - name: Verify the Dev Hub answers on loopback port 3001
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ autheo_devhub_port }}/"
+        method: GET
+        status_code: [200, 307, 308]
+      register: _autheo_devhub_http
+      retries: 12
+      delay: 5
+      until: _autheo_devhub_http.status in [200, 307, 308]
+      tags: [autheo_devhub]
+  rescue:
+    - name: Restore the previous Dev Hub release after a failed publication
+      ansible.builtin.shell: |
+        set -euo pipefail
+        install_dir={{ autheo_devhub_install_dir | quote }}
+        previous_dir="${install_dir}.previous"
+        if [ -d "${previous_dir}" ]; then
+          systemctl stop {{ autheo_devhub_service_name }} || true
+          rm -rf "${install_dir}.failed"
+          [ -d "${install_dir}" ] && mv "${install_dir}" "${install_dir}.failed"
+          mv "${previous_dir}" "${install_dir}"
+          systemctl start {{ autheo_devhub_service_name }}
+        fi
+      args:
+        executable: /bin/bash
+      when: autheo_devhub_publish | bool
+      changed_when: false
+      tags: [autheo_devhub]
+
+    - name: Fail after attempting Dev Hub rollback
+      ansible.builtin.fail:
+        msg: >-
+          Autheo Dev Hub publication or verification failed. The previous
+          release was restored when one existed; see the failed task above for
+          the original error.
+      tags: [autheo_devhub]
+
+- name: Report the verified Dev Hub release
+  ansible.builtin.debug:
+    msg: >-
+      AUTHEO DEV HUB VERIFIED (:{{ autheo_devhub_port }}): service
+      {{ autheo_devhub_service_name }} is active; BUILD_ID
+      {{ _autheo_devhub_installed_identity.stdout_lines[0] | trim }};
+      source {{ _autheo_devhub_installed_identity.stdout_lines[1] | trim }}.
+  tags: [autheo_devhub]
