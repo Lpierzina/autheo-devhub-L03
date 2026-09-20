@@ -118,7 +118,7 @@ trap 'rm -f "$vault_error" "${deploy_log:-}"' EXIT
 # WSL mounts are commonly world-writable, which makes Ansible intentionally
 # ignore a config discovered from the current directory. Explicitly selecting
 # this repository's non-secret config preserves its configured vault source.
-if ! env ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${vault_cmd[@]}" >/dev/null 2>"$vault_error; then
+if ! env ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${vault_cmd[@]}" >/dev/null 2>"$vault_error"; then
   if grep -Eq 'password file.*(not found|does not exist)' "$vault_error"; then
     die "vault password source is missing. Restore the configured pre-existing password file or pass --vault-password-file PATH."
   fi
