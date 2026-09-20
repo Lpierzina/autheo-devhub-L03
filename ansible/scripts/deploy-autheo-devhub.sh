@@ -9,12 +9,14 @@ REPO_DIR="$(cd -- "$ANSIBLE_DIR/.." && pwd)"
 PLAYBOOK="$ANSIBLE_DIR/playbooks/parallel-deploy.yml"
 ROLE_TASKS="$ANSIBLE_DIR/roles/autheo_devhub/tasks/main.yml"
 VAULT_FILE="$ANSIBLE_DIR/inventory/group_vars/all/vault.yml"
+DEFAULT_VAULT_PASSWORD_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autheo/ansible/vault_pass"
 
 inventory="${AUTHEO_DEVHUB_INVENTORY:-$ANSIBLE_DIR/inventory/hosts.ini}"
 repo="${AUTHEO_DEVHUB_REPO:-https://github.com/ThothDivision/L0_devhub_deploy.git}"
 version="${AUTHEO_DEVHUB_VERSION:-main}"
 limit="${AUTHEO_DEVHUB_LIMIT:-}"
-vault_password_file="${AUTHEO_DEVHUB_VAULT_PASSWORD_FILE:-}"
+vault_password_file="${AUTHEO_DEVHUB_VAULT_PASSWORD_FILE:-$DEFAULT_VAULT_PASSWORD_FILE}"
+vault_password_file_explicit=0
 assume_yes="${AUTHEO_DEVHUB_ASSUME_YES:-0}"
 update="${AUTHEO_DEVHUB_UPDATE:-0}"
 
@@ -30,7 +32,7 @@ Options:
   --repo URL                   Dev Hub source repository
   --version REF                Dev Hub source revision (default: main)
   --limit PATTERN              Limit Ansible to the elected Dev Hub host
-  --vault-password-file PATH   Use this existing vault password file
+  --vault-password-file PATH   Use an existing vault password file
   --update                     Clean-fast-forward this checkout before deployment
   --yes                        Skip the interactive deployment confirmation
   -h, --help                   Show this help
@@ -43,6 +45,10 @@ Environment equivalents:
 Before changing a host, this command decrypts the existing local Ansible
 vault. It refuses to deploy when the vault or its password source is missing
 or cannot decrypt. No vault values are printed.
+
+The default password source is
+$XDG_CONFIG_HOME/autheo/ansible/vault_pass, or
+$HOME/.config/autheo/ansible/vault_pass when XDG_CONFIG_HOME is unset.
 EOF
 }
 
@@ -76,6 +82,7 @@ while (($#)); do
     --vault-password-file)
       (($# >= 2)) || die "--vault-password-file requires a path"
       vault_password_file="$2"
+      vault_password_file_explicit=1
       shift 2
       ;;
     --update)
@@ -102,20 +109,21 @@ done
 [[ -f "$VAULT_FILE" ]] || die \
   "vault file is missing: $VAULT_FILE. Recover the pre-existing encrypted vault; do not create a replacement."
 
-if [[ -n "$vault_password_file" ]]; then
-  [[ -f "$vault_password_file" ]] || die "selected vault password file is missing: $vault_password_file"
-  [[ -r "$vault_password_file" ]] || die "selected vault password file is not readable: $vault_password_file"
-fi
+[[ -f "$vault_password_file" ]] ||
+  die "vault password source is missing: $vault_password_file. Restore the exact pre-existing password from approved secret storage; do not create a replacement."
+[[ -r "$vault_password_file" ]] ||
+  die "vault password source is not readable: $vault_password_file. Correct access without changing its contents."
 
 vault_cmd=(ansible-vault view)
-if [[ -n "$vault_password_file" ]]; then
+if [[ "$vault_password_file_explicit" == "1" || -n "${AUTHEO_DEVHUB_VAULT_PASSWORD_FILE:-}" ]]; then
   vault_cmd+=(--vault-password-file "$vault_password_file")
 fi
 vault_cmd+=("$VAULT_FILE")
 
 vault_error="$(mktemp)"
 trap 'rm -f "$vault_error" "${deploy_log:-}"' EXIT
-if ! (cd "$ANSIBLE_DIR" && "${vault_cmd[@]}" >/dev/null 2>"$vault_error"); then
+if ! (cd "$ANSIBLE_DIR" &&
+  ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${vault_cmd[@]}" >/dev/null 2>"$vault_error"); then
   if grep -Eq 'password file.*(not found|does not exist)' "$vault_error"; then
     die "vault password source is missing. Restore the configured pre-existing password file or pass --vault-password-file PATH."
   fi
@@ -134,7 +142,15 @@ if [[ "$update" == "1" ]]; then
   branch="$(git -C "$REPO_DIR" branch --show-current)"
   [[ -n "$branch" ]] || die "--update requires a checked-out branch"
   git -C "$REPO_DIR" fetch origin "$branch"
-  git -C "$REPO_DIR" merge --ff-only "origin/$branch"
+  if git -C "$REPO_DIR" merge-base --is-ancestor "origin/$branch" HEAD; then
+    :
+  elif git -C "$REPO_DIR" merge-base --is-ancestor HEAD "origin/$branch"; then
+    # --ff-only can only advance the current branch pointer and update a clean
+    # worktree; it never creates a merge commit or resolves divergent history.
+    git -C "$REPO_DIR" merge --ff-only "origin/$branch"
+  else
+    die "--update refuses a diverged worktree; it will not merge, rebase, or reset history"
+  fi
 fi
 
 if [[ "$assume_yes" != "1" ]]; then
@@ -160,7 +176,8 @@ if [[ -n "$vault_password_file" ]]; then
 fi
 
 deploy_log="$(mktemp)"
-if ! (cd "$ANSIBLE_DIR" && "${playbook_cmd[@]}") 2>&1 | tee "$deploy_log"; then
+if ! (cd "$ANSIBLE_DIR" &&
+  ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${playbook_cmd[@]}") 2>&1 | tee "$deploy_log"; then
   die "Autheo Dev Hub deployment failed; no success verification was accepted"
 fi
 grep -Fq 'AUTHEO DEV HUB VERIFIED (:3001)' "$deploy_log" ||
