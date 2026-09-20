@@ -1,0 +1,21 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Autheo Development Hub
+After=network-online.target hive-node.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory={{ autheo_devhub_install_dir }}
+EnvironmentFile=/etc/autheo-devhub.env
+# `next` is a node shebang script, so include the discovered node directory for
+# nvm-only hosts as well as the conventional system locations.
+Environment=PATH={{ autheo_devhub_node_dir }}:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+Environment=PORT={{ autheo_devhub_port }}
+ExecStart={{ autheo_devhub_install_dir }}/node_modules/.bin/next start -H 127.0.0.1 -p {{ autheo_devhub_port }}
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

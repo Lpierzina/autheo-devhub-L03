@@ -139,6 +139,45 @@ adding or re-imaging a node).
 failure class) -- every task in this playbook reuses one multiplexed
 connection per host rather than opening a fresh one per task/module call.
 
+### Primary Autheo Development Hub (:3001)
+
+The primary Autheo Development Hub is **not** the fleet dashboard. It is
+`autheo-devhub.service`, runs from `/opt/autheo-devhub`, and listens only on
+`127.0.0.1:3001`. The existing `hive-ui.service` remains the independently
+deployed fleet dashboard on `127.0.0.1:3002`.
+
+The Dev Hub deploy is opt-in and runs on the existing `ui_builder` host (the
+control-plane owner elected by `parallel-deploy.yml`), never by a hard-coded
+host name. It clones the requested source/ref into staging, uses the
+application's `ui/package-lock.json` via `npm ci`, runs the production build,
+validates `.next/BUILD_ID` and the Next runtime, then atomically replaces
+`/opt/autheo-devhub`. `/etc/autheo-devhub.env` is never copied into the
+artifact or overwritten; an empty root-only file is created only if it is
+missing. A failed build cannot modify the running release, and a failed
+post-publication health check attempts to restore the retained previous
+release.
+
+```bash
+ansible-playbook \
+  -i inventory/hosts.ini \
+  playbooks/parallel-deploy.yml \
+  --tags backend,ui,autheo_devhub \
+  -e autheo_devhub_enabled=true \
+  -e autheo_devhub_repo=https://github.com/ThothDivision/L0_devhub_deploy.git \
+  -e autheo_devhub_version=main \
+  -e allow_noop_deploy=true
+```
+
+The role reports `AUTHEO DEV HUB VERIFIED (:3001)` only after confirming the
+installed `BUILD_ID` matches the build made in that run, systemd is active and
+actually restarted for a published release, and
+`http://127.0.0.1:3001/` returns a successful status. Verify manually with:
+
+```bash
+systemctl status autheo-devhub
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3001/
+```
+
 ## Add one new node (day 2)
 
 ```bash
@@ -214,6 +253,7 @@ resolve from the encrypted `vault.yml`.
 | `hive_ui` | builds + installs the `ui/` dashboard (Next.js) and its systemd unit -- used by `site.yml`'s from-scratch path |
 | `hive_platform_fanout` | build/push/restart task files backing `parallel-deploy.yml`'s backend phases (one build per glibc group, parallel push, bounded-serial restart) |
 | `hive_ui_fanout` | build/push/restart task files backing `parallel-deploy.yml`'s UI phases (one canonical build, parallel push, bounded-serial restart) |
+| `autheo_devhub` | opt-in atomic primary Dev Hub deployment on the elected UI/control-plane host (`autheo-devhub.service`, loopback `:3001`); distinct from `hive-ui` (`:3002`) |
 | `mesh_bootstrap` | mesh trust config (join-proof self-admit by default, or the opt-in static `HIVE_TRUSTED_NODE_IDS` allowlist) |
 | `dns_vercel` | DNS/TLS ingress systemd drop-in (Vercel DNS + ACME DNS-01), matching `RUNBOOK.md` |
 | `hive_browser_node` | one capped headless browser node per host on the five `[browser_nodes]` hosts: headless Chromium + a loopback session broker that mints the short-lived tenant JWT the admission requires (see its own README for the auth decision and every cap value) |

@@ -209,6 +209,13 @@ gossips a NodeInfo carrying that key's iroh address.
   restart on another node.
 - **The dashboard** (`ui/`, port 3002): its own OS process/launchd unit;
   restarting or redeploying it never touches gossip/mesh/DNS state.
+- **The primary Autheo Development Hub** (`autheo-devhub.service`, port 3001):
+  a separate, opt-in Next.js release at `/opt/autheo-devhub`, managed by
+  `ansible/playbooks/parallel-deploy.yml --tags autheo_devhub` with
+  `autheo_devhub_enabled=true`. It is not the `hive-ui` dashboard and does not
+  replace the dashboard's port 3002 deployment. Its loopback health endpoint
+  is `http://127.0.0.1:3001/`; its existing `/etc/autheo-devhub.env` stays
+  outside the release artifact.
 - **Existing peers**: a hot-join needs zero restarts anywhere in the fleet.
   A `hive-cloud` restart on ONE node re-joins the mesh from its own
   persisted roster/GuardianDB replica + iroh's persistent identity —
