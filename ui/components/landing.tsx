@@ -137,7 +137,30 @@ export function OpeningSplash() {
           justifyContent: "center",
         }}
       >
-        <AnimatedGlobe className="h-full w-full" />
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            zIndex: 0,
+            left: "50%",
+            top: "50%",
+            width: "100%",
+            transform: "translate(-50%, -56%)",
+            color: "#86efac",
+            fontSize: "clamp(3.5rem, 15vw, 7.5rem)",
+            fontWeight: 650,
+            letterSpacing: "0.13em",
+            lineHeight: 0.8,
+            opacity: 0.22,
+            textAlign: "center",
+            textTransform: "uppercase",
+            whiteSpace: "nowrap",
+            userSelect: "none",
+          }}
+        >
+          Autheo
+        </span>
+        <AnimatedGlobe className="relative z-10 h-full w-full" />
         <span
           style={{
             position: "absolute",
