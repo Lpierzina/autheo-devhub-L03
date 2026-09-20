@@ -10,16 +10,40 @@
  * scale or position.
  */
 export function AnimatedGlobe({ className = "" }: { className?: string }) {
+  const nodes = [
+    [18, 31], [31, 20], [48, 29], [66, 18], [79, 37],
+    [23, 56], [41, 47], [57, 59], [72, 53], [37, 75], [61, 78],
+  ];
+
   return (
     <div className={`globe-3d ${className}`} aria-hidden="true">
+      <div className="globe-3d-aura" />
       <div className="globe-3d-orbit globe-3d-orbit-a" />
       <div className="globe-3d-orbit globe-3d-orbit-b" />
       <div className="globe-3d-sphere">
-        <div className="globe-3d-grid">
+        <div className="globe-3d-inner-light" />
+        <div className="globe-3d-grid globe-3d-grid-back">
           {[0, 1, 2, 3, 4].map((index) => <span key={`lat-${index}`} className={`globe-3d-latitude globe-3d-latitude-${index}`} />)}
           {[0, 1, 2, 3, 4].map((index) => <span key={`lon-${index}`} className={`globe-3d-longitude globe-3d-longitude-${index}`} />)}
         </div>
+        <div className="globe-3d-network">
+          <span className="globe-3d-path globe-3d-path-a" />
+          <span className="globe-3d-path globe-3d-path-b" />
+          <span className="globe-3d-path globe-3d-path-c" />
+          {nodes.map(([left, top], index) => (
+            <span
+              key={`${left}-${top}`}
+              className={`globe-3d-node globe-3d-node-${index % 3}`}
+              style={{ left: `${left}%`, top: `${top}%` }}
+            />
+          ))}
+        </div>
+        <div className="globe-3d-grid globe-3d-grid-front">
+          {[0, 1, 2].map((index) => <span key={`front-lat-${index}`} className={`globe-3d-latitude globe-3d-front-latitude-${index}`} />)}
+          {[0, 1, 2].map((index) => <span key={`front-lon-${index}`} className={`globe-3d-longitude globe-3d-front-longitude-${index}`} />)}
+        </div>
         <div className="globe-3d-glow" />
+        <div className="globe-3d-rim" />
       </div>
     </div>
   );
