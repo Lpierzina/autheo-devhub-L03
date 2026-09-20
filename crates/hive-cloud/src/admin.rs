@@ -8223,7 +8223,10 @@ async fn security_posture(
             detail: "The responding node's current mesh registry is incomplete or lacks backend evidence, so fleet isolation posture is unknown.".into(),
             observed_at_ms,
         }
-    } else if backend_counts.mock > 0 && backend_counts.firecracker == 0 && backend_counts.litebox == 0 {
+    } else if backend_counts.mock > 0
+        && backend_counts.firecracker == 0
+        && backend_counts.litebox == 0
+    {
         SecurityEvidence {
             state: SecurityEvidenceState::Unavailable,
             detail: "Known nodes report Mock, which provides no workload isolation and is not a sandbox.".into(),
@@ -8238,7 +8241,9 @@ async fn security_posture(
     } else if backend_counts.firecracker > 0 && backend_counts.mock == 0 {
         SecurityEvidence {
             state: SecurityEvidenceState::Enabled,
-            detail: "All known production-capable nodes report Firecracker hardware microVM isolation.".into(),
+            detail:
+                "All known production-capable nodes report Firecracker hardware microVM isolation."
+                    .into(),
             observed_at_ms,
         }
     } else {
