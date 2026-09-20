@@ -116,10 +116,10 @@ vault_cmd+=("$VAULT_FILE")
 vault_error="$(mktemp)"
 trap 'rm -f "$vault_error" "${deploy_log:-}"' EXIT
 if ! (cd "$ANSIBLE_DIR" && "${vault_cmd[@]}" >/dev/null 2>"$vault_error"); then
-  if rg -q 'password file.*(not found|does not exist)' "$vault_error"; then
+  if grep -Eq 'password file.*(not found|does not exist)' "$vault_error"; then
     die "vault password source is missing. Restore the configured pre-existing password file or pass --vault-password-file PATH."
   fi
-  if rg -q 'password file.*(not readable|Permission denied)' "$vault_error"; then
+  if grep -Eq 'password file.*(not readable|Permission denied)' "$vault_error"; then
     die "vault password source is not readable. Correct its ownership or permissions without changing its contents."
   fi
   die "vault preflight could not decrypt $VAULT_FILE. Its 1.1 header has no vault ID, so this is not a vault-ID mismatch; use the correct pre-existing password source."
@@ -163,7 +163,7 @@ deploy_log="$(mktemp)"
 if ! (cd "$ANSIBLE_DIR" && "${playbook_cmd[@]}") 2>&1 | tee "$deploy_log"; then
   die "Autheo Dev Hub deployment failed; no success verification was accepted"
 fi
-rg -q 'AUTHEO DEV HUB VERIFIED \(:3001\)' "$deploy_log" ||
+grep -Fq 'AUTHEO DEV HUB VERIFIED (:3001)' "$deploy_log" ||
   die "deployment ended without the required AUTHEO DEV HUB VERIFIED (:3001) result"
 
 cat <<'EOF'
