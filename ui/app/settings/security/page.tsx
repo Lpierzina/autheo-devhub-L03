@@ -1,5 +1,5 @@
-import { SecurityProfile } from "@/components/security-profile";
+import { redirect } from "next/navigation";
 
 export default function SecurityProfilePage() {
-  return <SecurityProfile />;
+  redirect("/network");
 }
