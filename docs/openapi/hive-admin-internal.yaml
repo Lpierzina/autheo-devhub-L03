@@ -58,6 +58,25 @@ paths:
     get: *id001
   /v1/overview:
     get: *id001
+  /v1/security/posture:
+    get:
+      summary: Responding node security posture
+      description: >
+        Tenant-facing, evidence-based posture calculated by the responding
+        control-plane node from its current live mesh registry. This is not a
+        fleet-wide guarantee or deployment placement report. It never exposes
+        peer identities, addresses, relay URLs, or negotiated session details.
+      x-autheo-security-classification: INTERNAL_CONTROL_PLANE
+      x-autheo-auth: JWT/API-key identity required when HIVE_JWT_SECRET is configured; any authenticated tenant may read.
+      responses:
+        '200':
+          description: Current evidence report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityPosture'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /v1/fleet-deployments:
     get: *id001
   /deployments:
@@ -362,6 +381,62 @@ components:
           type: integer
         gpu_count:
           type: integer
+    SecurityPosture:
+      type: object
+      required: [observed_at_ms, observer, post_quantum, network, isolation]
+      properties:
+        observed_at_ms:
+          type: integer
+          format: int64
+          description: Epoch milliseconds when this response was assembled.
+        observer:
+          type: object
+          required: [node, region]
+          properties:
+            node:
+              type: string
+            region:
+              type: string
+        post_quantum:
+          $ref: '#/components/schemas/SecurityEvidence'
+        network:
+          $ref: '#/components/schemas/SecurityEvidence'
+        isolation:
+          allOf:
+          - $ref: '#/components/schemas/SecurityEvidence'
+          - type: object
+            required: [backend_counts, observer_backend]
+            properties:
+              backend_counts:
+                type: object
+                required: [firecracker, litebox, mock, unknown]
+                properties:
+                  firecracker:
+                    type: integer
+                  litebox:
+                    type: integer
+                  mock:
+                    type: integer
+                  unknown:
+                    type: integer
+              observer_backend:
+                type: string
+    SecurityEvidence:
+      type: object
+      required: [state, detail, observed_at_ms]
+      properties:
+        state:
+          type: string
+          enum: [enabled, partial, unavailable, unknown]
+          description: >
+            enabled is direct runtime evidence; partial is a real protection
+            with incomplete coverage or assurance; unavailable is known not to
+            be enabled; unknown means required evidence is missing.
+        detail:
+          type: string
+        observed_at_ms:
+          type: integer
+          format: int64
     Capacity:
       type: object
       properties:
