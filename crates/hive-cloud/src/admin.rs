@@ -34,6 +34,7 @@ pub fn router(cloud: Arc<CloudState>) -> Router {
         // whenever HIVE_JWT_SECRET enables Admin enforcement.
         .route("/v1/mesh", get(mesh_health))
         .route("/v1/overview", get(overview))
+        .route("/v1/security/posture", get(security_posture))
         .route("/v1/tasks/health", get(tasks_health))
         .route("/v1/nodes", get(nodes))
         .route("/v1/serve-hosts", get(serve_hosts))
@@ -8090,6 +8091,183 @@ async fn overview(
             "trusted_peers": c.trusted_peer_ids.read().map(|s| s.len()).unwrap_or(0),
         },
     })))
+}
+
+/// Tenant-facing security-profile contract (`GET /v1/security/posture`).
+///
+/// This is the responding node's current control-plane view, not a deployment
+/// placement decision or a fleet-wide guarantee. It intentionally exposes no
+/// peer identities, addresses, relay URLs, or negotiated session details.
+///
+/// Evidence states have the same meaning in every section:
+/// - `enabled`: backed by direct runtime evidence.
+/// - `partial`: a real protection exists, but its coverage or assurance is incomplete.
+/// - `unavailable`: the capability is known not to be enabled.
+/// - `unknown`: the evidence required for a conclusion is missing.
+///
+/// Future post-quantum `enabled` support must be driven by negotiated-handshake
+/// telemetry, never an environment flag or Cargo feature.
+#[derive(Serialize)]
+struct SecurityPostureResponse {
+    observed_at_ms: u64,
+    observer: SecurityPostureObserver,
+    post_quantum: SecurityEvidence,
+    network: SecurityEvidence,
+    isolation: IsolationEvidence,
+}
+
+#[derive(Serialize)]
+struct SecurityPostureObserver {
+    node: String,
+    region: String,
+}
+
+#[derive(Serialize)]
+struct SecurityEvidence {
+    state: SecurityEvidenceState,
+    detail: String,
+    observed_at_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SecurityEvidenceState {
+    Enabled,
+    Partial,
+    Unavailable,
+    Unknown,
+}
+
+#[derive(Serialize)]
+struct IsolationEvidence {
+    #[serde(flatten)]
+    evidence: SecurityEvidence,
+    /// Counts are derived only from this observer's fresh gossiped NodeInfo
+    /// registry; they do not identify peers or establish tenant placement.
+    backend_counts: IsolationBackendCounts,
+    observer_backend: String,
+}
+
+#[derive(Default, Serialize)]
+struct IsolationBackendCounts {
+    firecracker: usize,
+    litebox: usize,
+    mock: usize,
+    unknown: usize,
+}
+
+async fn security_posture(
+    State(c): State<Arc<CloudState>>,
+    claims: Option<axum::Extension<crate::auth::Claims>>,
+) -> Result<Json<SecurityPostureResponse>, (StatusCode, String)> {
+    require_auth_read(claims.as_ref().map(|e| &e.0))?;
+
+    let observed_at_ms = now_ms();
+    let observer = c.registry.me();
+    let mesh_running = c.iroh.read().is_some() && observer.iroh_addr.is_some();
+    let peer_trust_enforced = std::env::var("HIVE_PEER_TRUST")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let network = if mesh_running {
+        let trust = if peer_trust_enforced {
+            " Peer admission policy is configured to enforce HIVE_PEER_TRUST."
+        } else {
+            " HIVE_PEER_TRUST admission policy is not enforced."
+        };
+        SecurityEvidence {
+            // The live endpoint proves this process has Iroh transport running,
+            // but no live negotiated-handshake counter exists to certify every
+            // client or peer session.
+            state: SecurityEvidenceState::Partial,
+            detail: format!(
+                "Iroh QUIC/TLS mesh transport is running on this responding node.{trust} This report does not certify every client or peer session because negotiated-handshake telemetry is unavailable."
+            ),
+            observed_at_ms,
+        }
+    } else {
+        SecurityEvidence {
+            state: SecurityEvidenceState::Unknown,
+            detail: "No live Iroh endpoint and advertised mesh address are both available on this responding node, so transport runtime evidence is incomplete.".into(),
+            observed_at_ms,
+        }
+    };
+
+    // See docs/pqc-migration-scope.md: today's mesh key exchange is classical
+    // X25519. Dependency capability is not negotiated-handshake evidence.
+    let post_quantum = SecurityEvidence {
+        state: SecurityEvidenceState::Unavailable,
+        detail: "Public TLS and mesh transport currently use classical key exchange; hybrid ML-KEM is not enabled or observed.".into(),
+        observed_at_ms,
+    };
+
+    let nodes = c.registry.nodes();
+    let mesh_health = c.mesh_health();
+    let mut backend_counts = IsolationBackendCounts::default();
+    for node in &nodes {
+        match node.backend.as_str() {
+            "firecracker" => backend_counts.firecracker += 1,
+            "litebox" => backend_counts.litebox += 1,
+            "mock" => backend_counts.mock += 1,
+            _ => backend_counts.unknown += 1,
+        }
+    }
+    let registry_incomplete = nodes.is_empty()
+        || backend_counts.unknown > 0
+        || (mesh_health.expected_peers > 0
+            && mesh_health.audible_peers < mesh_health.expected_peers);
+    let observer_backend = observer.backend.clone();
+    let isolation_evidence = if registry_incomplete {
+        SecurityEvidence {
+            state: SecurityEvidenceState::Unknown,
+            detail: "The responding node's current mesh registry is incomplete or lacks backend evidence, so fleet isolation posture is unknown.".into(),
+            observed_at_ms,
+        }
+    } else if backend_counts.mock > 0
+        && backend_counts.firecracker == 0
+        && backend_counts.litebox == 0
+    {
+        SecurityEvidence {
+            state: SecurityEvidenceState::Unavailable,
+            detail: "Known nodes report Mock, which provides no workload isolation and is not a sandbox.".into(),
+            observed_at_ms,
+        }
+    } else if backend_counts.litebox > 0 {
+        SecurityEvidence {
+            state: SecurityEvidenceState::Partial,
+            detail: "Known nodes include Litebox, an unprivileged syscall sandbox that is not a Firecracker/gVisor-grade hardware isolation boundary. Firecracker nodes use hardware microVM isolation; Mock nodes provide no isolation.".into(),
+            observed_at_ms,
+        }
+    } else if backend_counts.firecracker > 0 && backend_counts.litebox == 0 {
+        SecurityEvidence {
+            state: SecurityEvidenceState::Enabled,
+            detail:
+                "All known production-capable nodes report Firecracker hardware microVM isolation; Mock nodes, if present, provide no workload isolation and are not a sandbox."
+                    .into(),
+            observed_at_ms,
+        }
+    } else {
+        SecurityEvidence {
+            state: SecurityEvidenceState::Partial,
+            detail: "Known nodes mix Firecracker hardware microVM isolation with Mock nodes, which provide no workload isolation and are not a sandbox.".into(),
+            observed_at_ms,
+        }
+    };
+
+    Ok(Json(SecurityPostureResponse {
+        observed_at_ms,
+        observer: SecurityPostureObserver {
+            node: c.node_name.clone(),
+            region: c.region.clone(),
+        },
+        post_quantum,
+        network,
+        isolation: IsolationEvidence {
+            evidence: isolation_evidence,
+            backend_counts,
+            observer_backend,
+        },
+    }))
 }
 
 pub(crate) async fn nodes(
