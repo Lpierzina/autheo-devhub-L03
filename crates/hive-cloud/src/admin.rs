@@ -4,22 +4,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
+    Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{delete, get, patch, post, put},
-    Json, Router,
 };
 use base64::Engine;
 use fluid_gateway::{RumDevice, RumRaw};
-use hive_core::{now_ms, BuildJob, JobState, ResourceSpec};
+use hive_core::{BuildJob, JobState, ResourceSpec, now_ms};
 use hive_edge::{
+    CronJob, WorkflowDef,
     bot::BotPolicy,
     routing::{Redirect, Rewrite},
     waf::WafRule,
-    CronJob, WorkflowDef,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::state::CloudState;
@@ -1994,13 +1994,7 @@ pub(crate) async fn post_to_host_json(
             }
         }
         if crate::auth::enforced() {
-            if let Ok(token) = crate::auth::issue(
-                "mesh-internal",
-                team,
-                "service",
-                false,
-                crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS,
-            ) {
+            if let Ok(token) = crate::auth::issue("mesh-internal", team, "service", false, crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS) {
                 request = request.bearer_auth(token);
             }
         }
@@ -3497,7 +3491,8 @@ pub(crate) async fn deployment_integrity(
         if !team_ok {
             return Err(StatusCode::NOT_FOUND);
         }
-        let chain_head_sha256 = hive_core::fold_integrity_chain(&id, &acceptance.integrity_chain);
+        let chain_head_sha256 =
+            hive_core::fold_integrity_chain(&id, &acceptance.integrity_chain);
         let signature = c.integrity_signer.sign_chain_head(&chain_head_sha256);
         let sep_public_keys: Vec<&hive_core::IntegrityEntryKind> = acceptance
             .integrity_chain
@@ -3784,11 +3779,7 @@ fn api_key_team(c: &Arc<CloudState>, h: &HeaderMap) -> Option<String> {
 
 /// Normalize an owner slug: empty/absent => "personal".
 pub(crate) fn norm(team: &str) -> &str {
-    if team.is_empty() {
-        "personal"
-    } else {
-        team
-    }
+    if team.is_empty() { "personal" } else { team }
 }
 
 /// Multi-tenant ownership guard: resolve the caller's tenant and verify it owns
@@ -5999,13 +5990,9 @@ pub(crate) async fn dispatch_project_delete_with(
                     }
                 }
                 if crate::auth::enforced() {
-                    if let Ok(token) = crate::auth::issue(
-                        "mesh-internal",
-                        team,
-                        "service",
-                        false,
-                        crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS,
-                    ) {
+                    if let Ok(token) =
+                        crate::auth::issue("mesh-internal", team, "service", false, crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS)
+                    {
                         request = request.bearer_auth(token);
                     }
                 }
@@ -6822,13 +6809,7 @@ pub(crate) async fn fetch_bytes_from_host(
         .header("x-hive-team", team)
         .timeout(std::time::Duration::from_secs(15));
     if crate::auth::enforced() {
-        if let Ok(tok) = crate::auth::issue(
-            "mesh-internal",
-            team,
-            "service",
-            false,
-            crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS,
-        ) {
+        if let Ok(tok) = crate::auth::issue("mesh-internal", team, "service", false, crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS) {
             rb = rb.bearer_auth(tok);
         }
     }
@@ -6850,13 +6831,7 @@ async fn proxy_get_json(c: &Arc<CloudState>, admin: &str, path: &str, team: &str
     // proxied here silently 403'd. Attach the same short-lived signed service
     // delegation `fanout_remote` uses so this node-to-node read authenticates.
     if crate::auth::enforced() {
-        if let Ok(tok) = crate::auth::issue(
-            "mesh-internal",
-            team,
-            "service",
-            false,
-            crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS,
-        ) {
+        if let Ok(tok) = crate::auth::issue("mesh-internal", team, "service", false, crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS) {
             rb = rb.bearer_auth(tok);
         }
     }
@@ -6964,13 +6939,7 @@ pub(crate) fn mesh_team_qs(team: &str) -> String {
         return String::new();
     }
     if crate::auth::enforced() {
-        if let Ok(tok) = crate::auth::issue(
-            "mesh-internal",
-            team,
-            "service",
-            false,
-            crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS,
-        ) {
+        if let Ok(tok) = crate::auth::issue("mesh-internal", team, "service", false, crate::auth::MESH_DELEGATION_TOKEN_TTL_SECS) {
             return format!("team={team}&tok={tok}");
         }
     }
@@ -8254,10 +8223,7 @@ async fn security_posture(
             detail: "The responding node's current mesh registry is incomplete or lacks backend evidence, so fleet isolation posture is unknown.".into(),
             observed_at_ms,
         }
-    } else if backend_counts.mock > 0
-        && backend_counts.firecracker == 0
-        && backend_counts.litebox == 0
-    {
+    } else if backend_counts.mock > 0 && backend_counts.firecracker == 0 && backend_counts.litebox == 0 {
         SecurityEvidence {
             state: SecurityEvidenceState::Unavailable,
             detail: "Known nodes report Mock, which provides no workload isolation and is not a sandbox.".into(),
@@ -8272,9 +8238,7 @@ async fn security_posture(
     } else if backend_counts.firecracker > 0 && backend_counts.mock == 0 {
         SecurityEvidence {
             state: SecurityEvidenceState::Enabled,
-            detail:
-                "All known production-capable nodes report Firecracker hardware microVM isolation."
-                    .into(),
+            detail: "All known production-capable nodes report Firecracker hardware microVM isolation.".into(),
             observed_at_ms,
         }
     } else {
@@ -11630,12 +11594,13 @@ async fn apikeys_list(
     claims: Option<axum::Extension<crate::auth::Claims>>,
 ) -> Json<Value> {
     let t = tenant(&c, &headers, claims.as_ref().map(|e| &e.0));
-    Json(json!(c
-        .apikeys
-        .list(&t)
-        .iter()
-        .map(|k| k.public())
-        .collect::<Vec<_>>()))
+    Json(json!(
+        c.apikeys
+            .list(&t)
+            .iter()
+            .map(|k| k.public())
+            .collect::<Vec<_>>()
+    ))
 }
 
 async fn apikey_create(
@@ -11678,12 +11643,13 @@ async fn integrations_list(
     claims: Option<axum::Extension<crate::auth::Claims>>,
 ) -> Json<Value> {
     let t = tenant(&c, &headers, claims.as_ref().map(|e| &e.0));
-    Json(json!(c
-        .integrations
-        .list(&t)
-        .iter()
-        .map(|i| i.public())
-        .collect::<Vec<_>>()))
+    Json(json!(
+        c.integrations
+            .list(&t)
+            .iter()
+            .map(|i| i.public())
+            .collect::<Vec<_>>()
+    ))
 }
 
 async fn integration_upsert(
@@ -17141,25 +17107,29 @@ sub      A      9.9.9.9
 "#;
         let recs = parse_zone(zone, "example.com");
         // apex A
-        assert!(recs
-            .iter()
-            .any(|r| r.kind == "A" && r.name.is_empty() && r.value == "76.76.21.21"));
+        assert!(
+            recs.iter()
+                .any(|r| r.kind == "A" && r.name.is_empty() && r.value == "76.76.21.21")
+        );
         // www CNAME (trailing dot stripped)
-        assert!(recs
-            .iter()
-            .any(|r| r.kind == "CNAME" && r.name == "www" && r.value == "app.example.com"));
+        assert!(
+            recs.iter()
+                .any(|r| r.kind == "CNAME" && r.name == "www" && r.value == "app.example.com")
+        );
         // MX with priority
         let mx = recs.iter().find(|r| r.kind == "MX").expect("mx");
         assert_eq!(mx.priority, Some(10));
         assert_eq!(mx.value, "mail.example.com");
         // TXT keeps content (quotes stripped)
-        assert!(recs
-            .iter()
-            .any(|r| r.kind == "TXT" && r.value.contains("v=spf1")));
+        assert!(
+            recs.iter()
+                .any(|r| r.kind == "TXT" && r.value.contains("v=spf1"))
+        );
         // minimal "name TYPE value" form
-        assert!(recs
-            .iter()
-            .any(|r| r.kind == "A" && r.name == "sub" && r.value == "9.9.9.9"));
+        assert!(
+            recs.iter()
+                .any(|r| r.kind == "A" && r.name == "sub" && r.value == "9.9.9.9")
+        );
     }
 
     #[test]
