@@ -32,8 +32,11 @@ cp inventory/group_vars/vault.yml.example inventory/group_vars/all/vault.yml
 # edit vault.yml: real HIVE_JWT_SECRET / HIVE_INTERNAL_TOKEN / VERCEL_API_TOKEN
 ansible-vault encrypt inventory/group_vars/all/vault.yml
 
-echo 'your-vault-password' > .vault_pass   # gitignored; ansible.cfg points at this
-chmod 600 .vault_pass
+# Store the new-fleet password outside this checkout. The checked-in
+# ansible.cfg points at this operator-local path.
+install -d -m 0700 /home/lpier/.config/autheo/ansible
+printf '%s\n' 'your-new-fleet-vault-password' > /home/lpier/.config/autheo/ansible/vault_pass
+chmod 600 /home/lpier/.config/autheo/ansible/vault_pass
 ```
 
 Every HIVE_* value with a sane default lives in
@@ -157,25 +160,40 @@ missing. A failed build cannot modify the running release, and a failed
 post-publication health check attempts to restore the retained previous
 release.
 
+One-command redeploy from the repository root (the wrapper asks for
+confirmation; `--yes` is suitable for an intentional non-interactive run):
+
 ```bash
-ansible-playbook \
-  -i inventory/hosts.ini \
-  playbooks/parallel-deploy.yml \
-  --tags backend,ui,autheo_devhub \
-  -e autheo_devhub_enabled=true \
-  -e autheo_devhub_repo=https://github.com/ThothDivision/L0_devhub_deploy.git \
-  -e autheo_devhub_version=main \
-  -e allow_noop_deploy=true
+ansible/scripts/deploy-autheo-devhub.sh --yes
 ```
 
-The role reports `AUTHEO DEV HUB VERIFIED (:3001)` only after confirming the
-installed `BUILD_ID` matches the build made in that run, systemd is active and
+The wrapper first decrypts the existing Ansible vault, verifies
+`roles/autheo_devhub/tasks/main.yml`, and runs only:
+
+```bash
+ansible-playbook -i inventory/hosts.ini playbooks/parallel-deploy.yml \
+  --tags autheo_devhub \
+  -e autheo_devhub_enabled=true \
+  -e autheo_devhub_repo=https://github.com/ThothDivision/L0_devhub_deploy.git \
+  -e autheo_devhub_version=main
+```
+
+Use `--inventory`, `--repo`, `--version`, `--limit`, or
+`--vault-password-file` for explicit safe overrides. `--update` is opt-in
+and performs only a clean fast-forward update of this checkout; it refuses
+any unclean or diverged working tree rather than merging, rebasing, or
+resetting it.
+
+The wrapper accepts success only after the role reports
+`AUTHEO DEV HUB VERIFIED (:3001)`. That result confirms the installed source
+revision and `BUILD_ID` match the build made in that run, systemd is active and
 actually restarted for a published release, and
 `http://127.0.0.1:3001/` returns a successful status. Verify manually with:
 
 ```bash
 systemctl status autheo-devhub
-curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3001/
+cat /opt/autheo-devhub/.autheo-devhub-release
+curl http://127.0.0.1:3001/
 ```
 
 ## Add one new node (day 2)
@@ -225,7 +243,7 @@ live in fleet presence: `roles/hive_browser_node/README.md`.
 ## Secrets
 
 Never commit real secrets. `inventory/hosts.ini`, `inventory/group_vars/
-all/vault.yml`, and `.vault_pass` are all gitignored -- only the `.example`
+all/vault.yml`, and local vault-password files are all gitignored -- only the `.example`
 templates ship in git. `vault.yml` lives inside `group_vars/all/` (not as a
 flat `group_vars/all.yml`-style file) because ansible's group_vars loader
 does NOT merge a flat `group_vars/<group>.yml` with a same-named
@@ -241,6 +259,34 @@ the `all/` directory specifically so both actually load. Secrets referenced in r
 `vault_hive_github_auth_config_id`, `vault_github_webhook_secret`,
 `vault_github_token`, `vault_hive_secret_key`)
 resolve from the encrypted `vault.yml`.
+
+### Vault preflight and recovery
+
+Before a deployment, verify only that the encrypted vault can be opened; do
+not print its plaintext:
+
+```bash
+cd ansible
+ansible-vault view \
+  --vault-password-file /home/lpier/.config/autheo/ansible/vault_pass \
+  inventory/group_vars/all/vault.yml >/dev/null
+```
+
+The configured password source is
+`/home/lpier/.config/autheo/ansible/vault_pass`. A missing vault file is
+different from a missing password file: restore the encrypted vault from the
+approved operator backup and the exact pre-existing password from the approved
+secret manager or a prior authorized control host. Preserve their contents;
+do **not** make a replacement from `vault.yml.example`, re-encrypt the vault,
+or invent a password. Ensure the recovered password file is readable only by
+its owner (`0600`) and parent directory is private (`0700`).
+
+If both files exist but this preflight fails, the password is wrong or stale.
+This repository's `$ANSIBLE_VAULT;1.1;AES256` header has no vault ID, so a
+vault-ID mismatch is not applicable to this file. Obtain the matching
+pre-existing password through the approved secret-recovery process, then
+repeat the preflight. Do not bypass vault protection with an empty inventory,
+placeholder secrets, or a replacement vault.
 
 ## Roles
 
