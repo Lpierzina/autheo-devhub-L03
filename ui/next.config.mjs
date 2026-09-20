@@ -190,6 +190,11 @@ const nextConfig = {
     const NO_STORE = "private, no-store, max-age=0, must-revalidate";
     const cc = (value) => [{ key: "Cache-Control", value }];
     const noStorePaths = [
+      // The root route selects either the authenticated dashboard or the
+      // signed-out landing after Clerk settles. Serving its HTML from the
+      // browser cache left users on a retired skin after a deploy, so it must
+      // always revalidate with the current build.
+      "/",
       "/account/:path*",
       "/settings/:path*",
       "/teams/:path*",
@@ -208,7 +213,6 @@ const nextConfig = {
       "/wfc/:path*",
     ];
     const publicPaths = [
-      "/",
       "/product/:path*",
       "/solutions/:path*",
       "/features/:path*",

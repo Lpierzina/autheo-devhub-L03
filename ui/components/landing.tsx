@@ -6,6 +6,7 @@ import { ArrowRight, Boxes, Database, Network } from "lucide-react";
 import { MarqueeBanner } from "@/components/marquee-banner";
 import { MarketingShell } from "@/components/marketing-shell";
 import Image from "next/image";
+import { AnimatedGlobe } from "@/components/globe";
 
 /* ------------------------------------------------------------------ *
  * autheo — public landing page. Renders inside the shared MarketingShell
@@ -97,7 +98,10 @@ export function OpeningSplash() {
     if (phase === "done") document.documentElement.style.overflow = "";
   }, [phase]);
   if (phase === "done") return null;
-  const size = "min(30rem, 86vw)";
+  // The loading surface previews the current dashboard visual rather than the
+  // retired wordmark-only ring. Keep it intentionally larger than the empty
+  // state globe so a refresh has a clear, full-screen transition.
+  const size = "min(52rem, 94vw)";
   return (
     // NOTE: `position:fixed` is a TRAP here — MarketingShell's page wrapper is
     // CSS-transformed (`-translate-x-1/2`), which turns any fixed descendant
@@ -133,20 +137,21 @@ export function OpeningSplash() {
           justifyContent: "center",
         }}
       >
-        <GlowRing style={{ position: "absolute", inset: 0 }} />
+        <AnimatedGlobe className="h-full w-full" />
         <span
-         style={{
-           position: "relative",
-           zIndex: 1,
-           fontSize: "2.2rem",
-           lineHeight: 1,
-           letterSpacing: "-0.04em",
-           fontWeight: 700,
-           color: "#bbf7d0",
-           animation: "intro-logo-pan 2.2s ease-in-out infinite",
-         }}
+          style={{
+            position: "absolute",
+            zIndex: 1,
+            bottom: "8%",
+            fontSize: "clamp(0.875rem, 1.6vw, 1.15rem)",
+            lineHeight: 1,
+            letterSpacing: "0.12em",
+            fontWeight: 600,
+            textTransform: "uppercase",
+            color: "#bbf7d0",
+          }}
         >
-         autheo.dev
+          Loading your cloud
         </span>
       </div>
     </div>
