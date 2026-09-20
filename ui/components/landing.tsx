@@ -151,7 +151,7 @@ export function OpeningSplash() {
             fontWeight: 650,
             letterSpacing: "0.13em",
             lineHeight: 0.8,
-            opacity: 0.16,
+            opacity: 0.22,
             textAlign: "center",
             textTransform: "uppercase",
             whiteSpace: "nowrap",
