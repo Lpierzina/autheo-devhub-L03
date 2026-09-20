@@ -147,11 +147,13 @@ export function OpeningSplash() {
             width: "100%",
             transform: "translate(-50%, -56%)",
             color: "#86efac",
-            fontSize: "clamp(3.5rem, 15vw, 7.5rem)",
+            // Deliberately exceeds the sphere's silhouette at desktop widths:
+            // the mark is a background hero layer, not a caption.
+            fontSize: "clamp(4.5rem, 17vw, 14rem)",
             fontWeight: 650,
-            letterSpacing: "0.13em",
+            letterSpacing: "0.1em",
             lineHeight: 0.8,
-            opacity: 0.22,
+            opacity: 0.18,
             textAlign: "center",
             textTransform: "uppercase",
             whiteSpace: "nowrap",
