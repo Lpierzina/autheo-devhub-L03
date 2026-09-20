@@ -33,10 +33,11 @@ cp inventory/group_vars/vault.yml.example inventory/group_vars/all/vault.yml
 ansible-vault encrypt inventory/group_vars/all/vault.yml
 
 # Store the new-fleet password outside this checkout. The checked-in
-# ansible.cfg points at this operator-local path.
-install -d -m 0700 /home/lpier/.config/autheo/ansible
-printf '%s\n' 'your-new-fleet-vault-password' > /home/lpier/.config/autheo/ansible/vault_pass
-chmod 600 /home/lpier/.config/autheo/ansible/vault_pass
+# ansible.cfg uses each operator's ~/.config/autheo/ansible/vault_pass.
+vault_config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+install -d -m 0700 "$vault_config_home/autheo/ansible"
+printf '%s\n' 'your-new-fleet-vault-password' > "$vault_config_home/autheo/ansible/vault_pass"
+chmod 600 "$vault_config_home/autheo/ansible/vault_pass"
 ```
 
 Every HIVE_* value with a sane default lives in
@@ -267,16 +268,19 @@ not print its plaintext:
 
 ```bash
 cd ansible
+vault_pass="${XDG_CONFIG_HOME:-$HOME/.config}/autheo/ansible/vault_pass"
 ANSIBLE_CONFIG="$PWD/ansible.cfg" ansible-vault view \
-  --vault-password-file /home/lpier/.config/autheo/ansible/vault_pass \
+  --vault-password-file "$vault_pass" \
   inventory/group_vars/all/vault.yml >/dev/null
 ```
 
-The configured password source is
-`/home/lpier/.config/autheo/ansible/vault_pass`. A missing vault file is
-different from a missing password file: restore the encrypted vault from the
-approved operator backup and the exact pre-existing password from the approved
-secret manager or a prior authorized control host. Preserve their contents;
+The configured password source is each operator's
+`~/.config/autheo/ansible/vault_pass`; the redeploy wrapper honors
+`XDG_CONFIG_HOME` when choosing its default, and `--vault-password-file` can
+select a different existing source. A missing vault file is different from a
+missing password file: restore the encrypted vault from the approved operator
+backup and the exact pre-existing password from the approved secret manager or
+a prior authorized control host. Preserve their contents;
 do **not** make a replacement from `vault.yml.example`, re-encrypt the vault,
 or invent a password. Ensure the recovered password file is readable only by
 its owner (`0600`) and parent directory is private (`0700`).

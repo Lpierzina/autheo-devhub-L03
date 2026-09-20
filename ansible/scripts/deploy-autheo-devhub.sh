@@ -9,7 +9,7 @@ REPO_DIR="$(cd -- "$ANSIBLE_DIR/.." && pwd)"
 PLAYBOOK="$ANSIBLE_DIR/playbooks/parallel-deploy.yml"
 ROLE_TASKS="$ANSIBLE_DIR/roles/autheo_devhub/tasks/main.yml"
 VAULT_FILE="$ANSIBLE_DIR/inventory/group_vars/all/vault.yml"
-DEFAULT_VAULT_PASSWORD_FILE="/home/lpier/.config/autheo/ansible/vault_pass"
+DEFAULT_VAULT_PASSWORD_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autheo/ansible/vault_pass"
 
 inventory="${AUTHEO_DEVHUB_INVENTORY:-$ANSIBLE_DIR/inventory/hosts.ini}"
 repo="${AUTHEO_DEVHUB_REPO:-https://github.com/ThothDivision/L0_devhub_deploy.git}"
@@ -32,7 +32,7 @@ Options:
   --repo URL                   Dev Hub source repository
   --version REF                Dev Hub source revision (default: main)
   --limit PATTERN              Limit Ansible to the elected Dev Hub host
-  --vault-password-file PATH   Use this existing vault password file
+  --vault-password-file PATH   Use an existing vault password file
   --update                     Clean-fast-forward this checkout before deployment
   --yes                        Skip the interactive deployment confirmation
   -h, --help                   Show this help
@@ -45,6 +45,10 @@ Environment equivalents:
 Before changing a host, this command decrypts the existing local Ansible
 vault. It refuses to deploy when the vault or its password source is missing
 or cannot decrypt. No vault values are printed.
+
+The default password source is
+$XDG_CONFIG_HOME/autheo/ansible/vault_pass, or
+$HOME/.config/autheo/ansible/vault_pass when XDG_CONFIG_HOME is unset.
 EOF
 }
 
