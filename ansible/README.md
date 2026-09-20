@@ -267,7 +267,7 @@ not print its plaintext:
 
 ```bash
 cd ansible
-ansible-vault view \
+ANSIBLE_CONFIG="$PWD/ansible.cfg" ansible-vault view \
   --vault-password-file /home/lpier/.config/autheo/ansible/vault_pass \
   inventory/group_vars/all/vault.yml >/dev/null
 ```
@@ -280,6 +280,10 @@ secret manager or a prior authorized control host. Preserve their contents;
 do **not** make a replacement from `vault.yml.example`, re-encrypt the vault,
 or invent a password. Ensure the recovered password file is readable only by
 its owner (`0600`) and parent directory is private (`0700`).
+
+On WSL or another world-writable checkout, Ansible deliberately ignores an
+`ansible.cfg` discovered from the current directory. Set `ANSIBLE_CONFIG` as
+shown above; the redeploy wrapper does this itself.
 
 If both files exist but this preflight fails, the password is wrong or stale.
 This repository's `$ANSIBLE_VAULT;1.1;AES256` header has no vault ID, so a
