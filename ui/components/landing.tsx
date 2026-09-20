@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ArrowRight, Boxes, Database, Network } from "lucide-react";
 import { MarqueeBanner } from "@/components/marquee-banner";
 import { MarketingShell } from "@/components/marketing-shell";
+import { AnimatedGlobe } from "@/components/globe";
 import Image from "next/image";
 
 /* ------------------------------------------------------------------ *
@@ -97,7 +98,7 @@ export function OpeningSplash() {
     if (phase === "done") document.documentElement.style.overflow = "";
   }, [phase]);
   if (phase === "done") return null;
-  const size = "min(30rem, 86vw)";
+  const size = "min(42rem, 92vw)";
   return (
     // NOTE: `position:fixed` is a TRAP here — MarketingShell's page wrapper is
     // CSS-transformed (`-translate-x-1/2`), which turns any fixed descendant
@@ -134,6 +135,7 @@ export function OpeningSplash() {
         }}
       >
         <GlowRing style={{ position: "absolute", inset: 0 }} />
+        <AnimatedGlobe className="h-full w-full opacity-90" />
         <span
          style={{
            position: "relative",
