@@ -8238,11 +8238,11 @@ async fn security_posture(
             detail: "Known nodes include Litebox, an unprivileged syscall sandbox that is not a Firecracker/gVisor-grade hardware isolation boundary. Firecracker nodes use hardware microVM isolation; Mock nodes provide no isolation.".into(),
             observed_at_ms,
         }
-    } else if backend_counts.firecracker > 0 && backend_counts.mock == 0 {
+    } else if backend_counts.firecracker > 0 && backend_counts.litebox == 0 {
         SecurityEvidence {
             state: SecurityEvidenceState::Enabled,
             detail:
-                "All known production-capable nodes report Firecracker hardware microVM isolation."
+                "All known production-capable nodes report Firecracker hardware microVM isolation; Mock nodes, if present, provide no workload isolation and are not a sandbox."
                     .into(),
             observed_at_ms,
         }
