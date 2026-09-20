@@ -26,6 +26,32 @@ export function AnimatedGlobe({ className = "" }: { className?: string }) {
           {[0, 1, 2, 3, 4].map((index) => <span key={`lat-${index}`} className={`globe-3d-latitude globe-3d-latitude-${index}`} />)}
           {[0, 1, 2, 3, 4].map((index) => <span key={`lon-${index}`} className={`globe-3d-longitude globe-3d-longitude-${index}`} />)}
         </div>
+        <svg
+          className="globe-3d-landmasses"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="xMidYMid meet"
+          aria-hidden="true"
+        >
+          <g className="globe-3d-landmass-fill">
+            {/* Deliberately abstracted continental silhouettes: a readable world
+                without turning the globe into a literal atlas. */}
+            <path d="M12 29 18 21 28 19 33 23 32 29 38 33 35 39 28 39 25 44 18 42 15 36Z" />
+            <path d="M33 47 39 48 42 55 40 62 44 69 40 80 35 75 34 65 30 57Z" />
+            <path d="M48 26 55 20 66 21 71 27 79 29 84 35 80 40 69 39 63 45 55 42 49 37Z" />
+            <path d="M57 48 66 46 73 52 72 61 68 67 67 77 62 81 57 72 53 62Z" />
+            <path d="M80 69 87 72 89 78 84 83 78 80 77 74Z" />
+          </g>
+          <g className="globe-3d-landmass-cuts">
+            <path d="m19 29 5 2-2 4-5-1Zm9-4 3 2-2 4-4-2Zm8 27 3 3-2 7-3-4Zm18-24 6 2-2 4-5-1Zm12 3 7 2-3 4-5-2Zm-5 22 5 2-2 5-4-2Zm2 14 4 2-1 6-4-2Z" />
+          </g>
+          <g className="globe-3d-coastlines">
+            <path d="M12 29 18 21 28 19 33 23 32 29 38 33 35 39 28 39 25 44 18 42 15 36Z" />
+            <path d="M33 47 39 48 42 55 40 62 44 69 40 80 35 75 34 65 30 57Z" />
+            <path d="M48 26 55 20 66 21 71 27 79 29 84 35 80 40 69 39 63 45 55 42 49 37Z" />
+            <path d="M57 48 66 46 73 52 72 61 68 67 67 77 62 81 57 72 53 62Z" />
+            <path d="M80 69 87 72 89 78 84 83 78 80 77 74Z" />
+          </g>
+        </svg>
         <div className="globe-3d-network">
           <span className="globe-3d-path globe-3d-path-a" />
           <span className="globe-3d-path globe-3d-path-b" />

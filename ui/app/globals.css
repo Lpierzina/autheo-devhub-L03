@@ -118,14 +118,15 @@ body {
   position: relative;
   display: grid;
   place-items: center;
+  container-type: size;
   perspective: 900px;
   isolation: isolate;
   transform-style: preserve-3d;
 }
 .globe-3d-aura {
   position: absolute;
-  width: 92%;
-  aspect-ratio: 1;
+  width: 92cqmin;
+  height: 92cqmin;
   border-radius: 50%;
   background:
     radial-gradient(circle, hsl(var(--accent) / 0.14) 0 18%, hsl(var(--accent) / 0.05) 40%, transparent 70%);
@@ -137,8 +138,8 @@ body {
 .globe-3d-sphere {
   position: relative;
   z-index: 1;
-  width: 76%;
-  aspect-ratio: 1;
+  width: 76cqmin;
+  height: 76cqmin;
   overflow: hidden;
   border: 1px solid hsl(var(--accent) / 0.52);
   border-radius: 50%;
@@ -181,6 +182,32 @@ body {
   filter: blur(12px);
   opacity: 0.85;
   transform: translateZ(-22px);
+}
+.globe-3d-landmasses {
+  position: absolute;
+  z-index: 2;
+  inset: 9%;
+  width: 82%;
+  height: 82%;
+  overflow: visible;
+  opacity: 0.84;
+  transform: rotate(-4deg) translateZ(5px);
+  animation: globe-land-drift 18s ease-in-out infinite alternate;
+}
+.globe-3d-landmass-fill {
+  fill: hsl(var(--accent) / 0.22);
+  filter: drop-shadow(0 0 3px hsl(var(--accent) / 0.32));
+}
+.globe-3d-landmass-cuts {
+  fill: hsl(151 40% 3% / 0.78);
+}
+.globe-3d-coastlines {
+  fill: none;
+  stroke: hsl(var(--accent) / 0.64);
+  stroke-width: 0.7;
+  stroke-linejoin: round;
+  stroke-dasharray: 1.4 1.2;
+  opacity: 0.9;
 }
 .globe-3d-grid {
   position: absolute;
@@ -285,8 +312,8 @@ body {
 .globe-3d-orbit {
   position: absolute;
   z-index: 4;
-  width: 108%;
-  height: 32%;
+  width: 108cqmin;
+  height: 32cqmin;
   border: 1px solid hsl(var(--accent) / 0.32);
   border-radius: 50%;
   box-shadow: 0 0 10px hsl(var(--accent) / 0.14);
@@ -294,15 +321,15 @@ body {
   animation: globe-orbit 8s linear infinite;
 }
 .globe-3d-orbit-b {
-  width: 122%;
-  height: 44%;
+  width: 122cqmin;
+  height: 44cqmin;
   animation-delay: -4s;
   animation-direction: reverse;
   opacity: 0.6;
 }
 @keyframes globe-turn {
-  from { transform: rotateX(-10deg) rotateY(-22deg) rotateZ(-5deg); }
-  to { transform: rotateX(8deg) rotateY(22deg) rotateZ(4deg); }
+  from { transform: scale(0.985); }
+  to { transform: scale(1); }
 }
 @keyframes globe-orbit {
   from { transform: rotateX(67deg) rotateZ(-20deg) translateZ(24px); }
@@ -324,13 +351,18 @@ body {
   from { opacity: 0.58; transform: translateZ(-40px) scale(1); }
   to { opacity: 0.9; transform: translateZ(-40px) scale(1.12); }
 }
+@keyframes globe-land-drift {
+  from { opacity: 0.64; transform: rotate(-5deg) translate(-1%, 1%) translateZ(5px); }
+  to { opacity: 0.9; transform: rotate(-2deg) translate(1%, -1%) translateZ(5px); }
+}
 @media (prefers-reduced-motion: reduce) {
   .globe-3d-sphere,
   .globe-3d-orbit,
   .globe-3d-grid,
   .globe-3d-network,
   .globe-3d-node,
-  .globe-3d-aura {
+  .globe-3d-aura,
+  .globe-3d-landmasses {
     animation: none;
   }
 }
