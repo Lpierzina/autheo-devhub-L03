@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Animated network globe">
+  <defs>
+    <clipPath id="sphere"><circle cx="100" cy="100" r="70"/></clipPath>
+    <radialGradient id="atmosphere" cx="32%" cy="24%" r="80%">
+      <stop offset="0" stop-color="#c4f4d9" stop-opacity=".2"/>
+      <stop offset=".64" stop-color="#239f68" stop-opacity=".04"/>
+      <stop offset="1" stop-color="#51d6f5" stop-opacity=".16"/>
+    </radialGradient>
+    <pattern id="stencil" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="3.4" fill="#239f68"/>
+    </pattern>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .orbit{fill:none;stroke:#51d6f5;stroke-width:1;stroke-dasharray:13 8 2 8;opacity:.55;transform-origin:100px 100px;animation:orbit 16s linear infinite}
+      .orbit.back{opacity:.2;transform:rotate(-18deg);animation-direction:reverse}
+      .grid{fill:none;stroke:#c4f4d9;stroke-width:.68;opacity:.34}
+      .world{fill:url(#stencil);stroke:#c4f4d9;stroke-width:.85;stroke-dasharray:2 2.4;opacity:.92}
+      .route{fill:none;stroke:#51d6f5;stroke-width:1.15;stroke-linecap:round;filter:url(#glow)}
+      .node{fill:#36dc8c;stroke:#d8ffe8;stroke-width:.7;filter:url(#glow);animation:pulse 2.8s ease-in-out infinite}
+      .map{transform-box:fill-box;transform-origin:center;animation:spin 38s linear infinite}
+      .aura{fill:none;stroke:#239f68;stroke-width:.8;opacity:.35;animation:breathe 6s ease-in-out infinite alternate}
+      @keyframes spin{to{transform:rotate(360deg)}}@keyframes orbit{to{transform:rotate(360deg)}}@keyframes pulse{50%{opacity:.42;transform:scale(.7)}}@keyframes breathe{to{opacity:.6;transform:scale(1.025)}}
+      @media (prefers-reduced-motion:reduce){.orbit,.map,.node,.aura{animation:none}}
+    </style>
+  </defs>
+  <circle class="aura" cx="100" cy="100" r="79"/>
+  <ellipse class="orbit back" cx="100" cy="100" rx="86" ry="23"/>
+  <ellipse class="orbit" cx="100" cy="100" rx="92" ry="31"/>
+  <g clip-path="url(#sphere)">
+    <circle cx="100" cy="100" r="70" fill="url(#atmosphere)"/>
+    <g class="grid">
+      <ellipse cx="100" cy="61" rx="42" ry="11"/><ellipse cx="100" cy="82" rx="62" ry="15"/><ellipse cx="100" cy="102" rx="70" ry="17"/><ellipse cx="100" cy="123" rx="59" ry="14"/><ellipse cx="100" cy="142" rx="38" ry="10"/>
+      <ellipse cx="100" cy="100" rx="22" ry="70"/><ellipse cx="100" cy="100" rx="46" ry="70"/><ellipse cx="100" cy="100" rx="65" ry="70"/>
+    </g>
+    <g class="map">
+      <path class="world" d="M34 83 41 70 51 65 58 55 72 56 82 64 80 72 91 77 94 87 86 95 76 94 69 104 59 101 53 110 43 101 41 91 34 88ZM64 112 76 112 85 122 89 134 85 144 93 154 88 169 80 181 72 171 74 157 66 144 63 130 56 121ZM104 67 114 57 126 57 135 65 145 63 155 72 167 72 175 80 186 85 190 96 182 102 169 99 161 106 151 104 142 113 132 107 121 110 113 101 105 96ZM124 112 134 108 144 112 152 121 150 132 143 139 145 151 138 160 139 174 130 183 123 175 119 160 113 150 116 134 108 124ZM160 132 171 130 178 136 176 144 167 146ZM166 159 181 159 190 167 188 178 178 185 167 180 163 168ZM98 51 105 43 114 46 119 53 112 60 102 58Z"/>
+      <path class="route" d="M43 93Q80 139 153 82M57 119Q99 72 141 128M59 78Q105 46 171 86"/>
+      <circle class="node" cx="43" cy="93" r="2.7"/><circle class="node" cx="80" cy="139" r="2.2" style="animation-delay:-.8s"/><circle class="node" cx="99" cy="72" r="3" style="animation-delay:-1.6s"/><circle class="node" cx="141" cy="128" r="2.2" style="animation-delay:-2.1s"/><circle class="node" cx="171" cy="86" r="2.7" style="animation-delay:-1.1s"/>
+    </g>
+  </g>
+  <circle cx="100" cy="100" r="70" fill="none" stroke="#c4f4d9" stroke-width="1.2" opacity=".8"/>
+</svg>

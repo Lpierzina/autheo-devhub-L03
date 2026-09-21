@@ -2,13 +2,10 @@
 
 import { useId } from "react";
 
+
 /**
- * An inline SVG globe avoids a WebGL dependency while keeping the stencil,
- * technical linework, and a useful still outline for reduced motion.
- *
- * The page background remains owned by globals.css. This component paints only
- * inside its own card, so its transitions cannot change the workshop artwork's
- * scale or position.
+ * A compact SVG globe uses compositor-friendly transforms rather than a
+ * JavaScript animation loop, keeping the network visual lively at any size.
  */
 export function AnimatedGlobe({
   className = "",
@@ -32,8 +29,8 @@ export function AnimatedGlobe({
           </radialGradient>
           <mask id={`${id}-continent-stencil`}>
             <rect width="100" height="100" fill="black" />
-            {/* Abstract continental silhouettes: a readable world, never an atlas. */}
-            <path fill="white" d="M14 34 18 25 28 21 35 24 35 30 41 33 38 40 31 41 27 47 19 44 15 39Z M31 49 39 49 43 56 40 64 45 70 40 81 35 76 34 67 29 58Z M47 28 55 21 66 22 72 27 80 29 86 36 82 42 72 41 65 46 56 43 49 38Z M56 49 65 47 73 53 72 62 68 68 67 79 62 83 56 73 52 63Z M80 70 88 73 90 79 85 84 78 81 77 75Z" />
+            {/* Recognizable coastlines, simplified enough to stay crisp at card scale. */}
+            <path fill="white" d="M12 33 16 27 21 25 24 20 31 20 36 24 35 28 40 30 42 35 38 39 33 39 30 44 25 43 22 47 17 43 16 38 12 36Z M27 48 33 48 38 53 40 59 38 64 42 69 40 76 36 82 32 77 33 70 29 63 27 57 24 53Z M47 25 52 20 58 20 62 24 67 23 72 27 78 27 82 31 87 33 89 38 85 41 79 40 75 43 70 42 66 46 61 43 56 44 52 40 48 38Z M57 48 62 46 67 48 71 52 70 57 67 60 68 66 65 70 65 77 61 82 58 78 56 71 53 66 54 59 51 55Z M75 58 80 57 83 60 82 64 78 65Z M78 72 85 72 89 76 88 81 83 84 78 81 76 76Z M44 17 47 14 51 15 53 18 50 21 46 20Z" />
             {/* Slots turn the land layer into a transparent technical stencil. */}
             <path fill="black" d="M19 30h8v2h-8Zm10-4h4v3h-4Zm-1 12h8v2h-8Zm7 16h5v3h-5Zm2 10h5v2h-5Zm15-34h8v2h-8Zm13-2h9v3h-9Zm5 11h8v2h-8Zm-8 15h7v3h-7Zm0 12h6v2h-6Zm18 10h6v2h-6Z" />
           </mask>
@@ -52,9 +49,10 @@ export function AnimatedGlobe({
             <ellipse cx="50" cy="75" rx="24" ry="7" />
             <ellipse cx="50" cy="50" rx="13" ry="40" /><ellipse cx="50" cy="50" rx="27" ry="40" /><ellipse cx="50" cy="50" rx="39" ry="40" />
           </g>
+          <g className="globe-3d-map">
           <g className="globe-3d-world" mask={`url(#${id}-continent-stencil)`}><rect x="10" y="10" width="80" height="80" /></g>
           <g className="globe-3d-coasts">
-            <path d="M14 34 18 25 28 21 35 24 35 30 41 33 38 40 31 41 27 47 19 44 15 39Z M31 49 39 49 43 56 40 64 45 70 40 81 35 76 34 67 29 58Z M47 28 55 21 66 22 72 27 80 29 86 36 82 42 72 41 65 46 56 43 49 38Z M56 49 65 47 73 53 72 62 68 68 67 79 62 83 56 73 52 63Z M80 70 88 73 90 79 85 84 78 81 77 75Z" />
+            <path d="M12 33 16 27 21 25 24 20 31 20 36 24 35 28 40 30 42 35 38 39 33 39 30 44 25 43 22 47 17 43 16 38 12 36Z M27 48 33 48 38 53 40 59 38 64 42 69 40 76 36 82 32 77 33 70 29 63 27 57 24 53Z M47 25 52 20 58 20 62 24 67 23 72 27 78 27 82 31 87 33 89 38 85 41 79 40 75 43 70 42 66 46 61 43 56 44 52 40 48 38Z M57 48 62 46 67 48 71 52 70 57 67 60 68 66 65 70 65 77 61 82 58 78 56 71 53 66 54 59 51 55Z M75 58 80 57 83 60 82 64 78 65Z M78 72 85 72 89 76 88 81 83 84 78 81 76 76Z M44 17 47 14 51 15 53 18 50 21 46 20Z" />
           </g>
           <g className="globe-3d-network globe-3d-network-far"><path d="M17 38 Q43 8 79 35" /><path d="M28 59 Q57 77 82 43" /></g>
           <g className="globe-3d-grid globe-3d-grid-front">
@@ -66,6 +64,7 @@ export function AnimatedGlobe({
             {[[20, 42], [31, 28], [43, 50], [57, 35], [70, 54], [80, 37], [62, 70]].map(([cx, cy], index) => (
               <circle key={`${cx}-${cy}`} className={`globe-3d-node globe-3d-node-${index % 3}`} cx={cx} cy={cy} r={index === 2 || index === 5 ? 1.5 : 1} />
             ))}
+          </g>
           </g>
         </g>
         <circle className="globe-3d-rim" cx="50" cy="50" r="40" />

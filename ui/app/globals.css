@@ -151,6 +151,11 @@ body {
   opacity: .48;
   filter: drop-shadow(0 0 2px rgb(48 220 139 / .28));
 }
+.globe-3d-map {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: globe-map-spin 38s linear infinite;
+}
 .globe-3d-coasts {
   fill: none;
   stroke: var(--globe-mint);
@@ -204,6 +209,9 @@ body {
 .globe-3d-card .globe-3d-world { opacity: .4; }
 .globe-3d-card .globe-3d-network-front { opacity: .64; }
 @keyframes globe-orbit { to { transform: rotate(360deg); } }
+@keyframes globe-map-spin {
+  to { transform: rotate(360deg); }
+}
 @keyframes globe-network-drift { from { translate: -1px 1px; } to { translate: 1px -1px; } }
 @keyframes globe-node-pulse { 0%, 100% { opacity: .42; } 50% { opacity: 1; } }
 @keyframes globe-aura { from { opacity: .16; transform: scale(.98); } to { opacity: .32; transform: scale(1.025); } }
@@ -212,7 +220,8 @@ body {
   .globe-3d-grid,
   .globe-3d-network,
   .globe-3d-node,
-  .globe-3d-aura {
+  .globe-3d-aura,
+  .globe-3d-map {
     animation: none;
   }
 }
