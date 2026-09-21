@@ -142,13 +142,13 @@ body {
 .globe-3d-grid {
   fill: none;
   stroke: #267dab;
-  stroke-width: .22;
-  opacity: .24;
+  stroke-width: .18;
+  opacity: .2;
 }
 .globe-3d-coasts {
   fill: none;
   stroke: var(--globe-cyan);
-  stroke-width: .42;
+  stroke-width: .4;
   stroke-linejoin: round;
   opacity: .9;
   filter: drop-shadow(0 0 1.5px rgb(53 220 255 / .72));
@@ -184,6 +184,10 @@ body {
 .globe-3d-node-1 { animation-delay: -.9s; opacity: .65; }
 .globe-3d-node-2 { animation-delay: -1.7s; opacity: .5; }
 .globe-3d-node-3 { animation-delay: -2.5s; opacity: .72; }
+.globe-3d-secondary-node {
+  fill: #66dfff;
+  opacity: .42;
+}
 .globe-3d-rim {
   fill: none;
   stroke: var(--globe-cyan);
@@ -193,6 +197,8 @@ body {
 }
 .globe-3d-card .globe-3d-art { filter: drop-shadow(0 0 12px rgb(22 136 255 / .16)); }
 .globe-3d-card .globe-3d-network { opacity: .48; }
+.globe-3d-hero .globe-3d-grid { opacity: .28; }
+.globe-3d-hero .globe-3d-network { opacity: .88; }
 @keyframes globe-node-pulse { 0%, 100% { opacity: .42; } 50% { opacity: 1; } }
 @keyframes globe-aura { from { opacity: .38; transform: scale(.985); } to { opacity: .62; transform: scale(1.015); } }
 @media (prefers-reduced-motion: reduce) {

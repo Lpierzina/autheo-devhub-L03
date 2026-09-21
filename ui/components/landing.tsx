@@ -104,7 +104,9 @@ export function OpeningSplash() {
   // Square container plus the globe SVG's square viewBox preserves the circle
   // at every viewport size; it is intentionally much larger than the Projects
   // empty-state version so Refresh reads as a branded hero.
-  const size = "min(56rem, 104vw)";
+  // Keep the transition dramatic while letting the wordmark and atmospheric
+  // glow breathe. This is 11% smaller than the prior 56rem / 104vw frame.
+  const size = "min(50rem, 92vw)";
   return (
     // NOTE: `position:fixed` is a TRAP here — MarketingShell's page wrapper is
     // CSS-transformed (`-translate-x-1/2`), which turns any fixed descendant
