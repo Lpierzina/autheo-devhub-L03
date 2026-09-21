@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { PreparingDeployment } from "@/components/clone-animation";
 import Image from "next/image";
 import { MarketplaceDeploymentModal } from "@/components/marketplace-deployment-modal";
+import { DeploymentModelHelp } from "@/components/deployment-model-help";
 
 // How long the "Preparing Git Repository" clone animation plays before the view
 // transitions to the live build logs (the build itself runs async on the node).
@@ -571,6 +572,7 @@ export default function NewProjectPage() {
           </div>
         )}
       </Card>
+      <DeploymentModelHelp className="mb-4" />
       <p className="mb-8 text-center text-sm text-muted">
         Paste a Git repo URL, or a container image from Docker Hub / Quay / any registry — DevHub
         creates the project and builds → deploys it (clone &amp; build, or pull the image).{" "}
@@ -888,6 +890,7 @@ function ConfigureTemplate({
             </div>
           )}
         </div>
+        <DeploymentModelHelp className="mb-6" />
 
         {error ? <p className="mb-4 text-sm text-red-600">{error}</p> : null}
 
@@ -1090,6 +1093,7 @@ function ConfigureImageTemplate({
             <Plus className="h-3.5 w-3.5" /> Add Variable
           </button>
         </div>
+        <DeploymentModelHelp className="mb-6" />
 
         {error ? <p className="mb-4 text-sm text-red-600">{error}</p> : null}
 
