@@ -1,76 +1,75 @@
 "use client";
 
+import { useId } from "react";
+
 /**
- * A CSS-only globe intentionally avoids a WebGL dependency: it works in the
- * dashboard's normal browser support envelope and retains a useful, still
- * outline when reduced motion is requested.
+ * An inline SVG globe avoids a WebGL dependency while keeping the stencil,
+ * technical linework, and a useful still outline for reduced motion.
  *
  * The page background remains owned by globals.css. This component paints only
  * inside its own card, so its transitions cannot change the workshop artwork's
  * scale or position.
  */
-export function AnimatedGlobe({ className = "" }: { className?: string }) {
-  const nodes = [
-    [18, 31], [31, 20], [48, 29], [66, 18], [79, 37],
-    [23, 56], [41, 47], [57, 59], [72, 53], [37, 75], [61, 78],
-  ];
+export function AnimatedGlobe({
+  className = "",
+  variant = "card",
+}: {
+  className?: string;
+  variant?: "hero" | "card";
+}) {
+  const isHero = variant === "hero";
+  const id = useId().replaceAll(":", "");
 
   return (
-    <div className={`globe-3d ${className}`} aria-hidden="true">
-      <div className="globe-3d-aura" />
-      <div className="globe-3d-orbit globe-3d-orbit-a" />
-      <div className="globe-3d-orbit globe-3d-orbit-b" />
-      <div className="globe-3d-sphere">
-        <div className="globe-3d-inner-light" />
-        <div className="globe-3d-grid globe-3d-grid-back">
-          {[0, 1, 2, 3, 4].map((index) => <span key={`lat-${index}`} className={`globe-3d-latitude globe-3d-latitude-${index}`} />)}
-          {[0, 1, 2, 3, 4].map((index) => <span key={`lon-${index}`} className={`globe-3d-longitude globe-3d-longitude-${index}`} />)}
-        </div>
-        <svg
-          className="globe-3d-landmasses"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="xMidYMid meet"
-          aria-hidden="true"
-        >
-          <g className="globe-3d-landmass-fill">
-            {/* Deliberately abstracted continental silhouettes: a readable world
-                without turning the globe into a literal atlas. */}
-            <path d="M12 29 18 21 28 19 33 23 32 29 38 33 35 39 28 39 25 44 18 42 15 36Z" />
-            <path d="M33 47 39 48 42 55 40 62 44 69 40 80 35 75 34 65 30 57Z" />
-            <path d="M48 26 55 20 66 21 71 27 79 29 84 35 80 40 69 39 63 45 55 42 49 37Z" />
-            <path d="M57 48 66 46 73 52 72 61 68 67 67 77 62 81 57 72 53 62Z" />
-            <path d="M80 69 87 72 89 78 84 83 78 80 77 74Z" />
+    <div className={`globe-3d globe-3d-${variant} ${className}`} aria-hidden="true">
+      <svg className="globe-3d-art" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <clipPath id={`${id}-clip`}><circle cx="50" cy="50" r="40" /></clipPath>
+          <radialGradient id={`${id}-atmosphere`} cx="34%" cy="28%" r="72%">
+            <stop offset="0%" stopColor="var(--globe-mint)" stopOpacity=".18" />
+            <stop offset="66%" stopColor="var(--globe-green)" stopOpacity=".025" />
+            <stop offset="100%" stopColor="var(--globe-blue)" stopOpacity=".1" />
+          </radialGradient>
+          <mask id={`${id}-continent-stencil`}>
+            <rect width="100" height="100" fill="black" />
+            {/* Abstract continental silhouettes: a readable world, never an atlas. */}
+            <path fill="white" d="M14 34 18 25 28 21 35 24 35 30 41 33 38 40 31 41 27 47 19 44 15 39Z M31 49 39 49 43 56 40 64 45 70 40 81 35 76 34 67 29 58Z M47 28 55 21 66 22 72 27 80 29 86 36 82 42 72 41 65 46 56 43 49 38Z M56 49 65 47 73 53 72 62 68 68 67 79 62 83 56 73 52 63Z M80 70 88 73 90 79 85 84 78 81 77 75Z" />
+            {/* Slots turn the land layer into a transparent technical stencil. */}
+            <path fill="black" d="M19 30h8v2h-8Zm10-4h4v3h-4Zm-1 12h8v2h-8Zm7 16h5v3h-5Zm2 10h5v2h-5Zm15-34h8v2h-8Zm13-2h9v3h-9Zm5 11h8v2h-8Zm-8 15h7v3h-7Zm0 12h6v2h-6Zm18 10h6v2h-6Z" />
+          </mask>
+        </defs>
+
+        <circle className="globe-3d-aura" cx="50" cy="50" r="46" />
+        <g className="globe-3d-orbits">
+          <ellipse className="globe-3d-orbit globe-3d-orbit-back" cx="50" cy="50" rx="48" ry="13" />
+          {isHero && <ellipse className="globe-3d-orbit globe-3d-orbit-front" cx="50" cy="50" rx="54" ry="20" />}
+        </g>
+        <g clipPath={`url(#${id}-clip)`}>
+          <circle className="globe-3d-base" cx="50" cy="50" r="40" fill={`url(#${id}-atmosphere)`} />
+          <g className="globe-3d-grid globe-3d-grid-far">
+            <ellipse cx="50" cy="27" rx="25" ry="7" /><ellipse cx="50" cy="39" rx="36" ry="9" />
+            <ellipse cx="50" cy="51" rx="40" ry="10" /><ellipse cx="50" cy="63" rx="35" ry="9" />
+            <ellipse cx="50" cy="75" rx="24" ry="7" />
+            <ellipse cx="50" cy="50" rx="13" ry="40" /><ellipse cx="50" cy="50" rx="27" ry="40" /><ellipse cx="50" cy="50" rx="39" ry="40" />
           </g>
-          <g className="globe-3d-landmass-cuts">
-            <path d="m19 29 5 2-2 4-5-1Zm9-4 3 2-2 4-4-2Zm8 27 3 3-2 7-3-4Zm18-24 6 2-2 4-5-1Zm12 3 7 2-3 4-5-2Zm-5 22 5 2-2 5-4-2Zm2 14 4 2-1 6-4-2Z" />
+          <g className="globe-3d-world" mask={`url(#${id}-continent-stencil)`}><rect x="10" y="10" width="80" height="80" /></g>
+          <g className="globe-3d-coasts">
+            <path d="M14 34 18 25 28 21 35 24 35 30 41 33 38 40 31 41 27 47 19 44 15 39Z M31 49 39 49 43 56 40 64 45 70 40 81 35 76 34 67 29 58Z M47 28 55 21 66 22 72 27 80 29 86 36 82 42 72 41 65 46 56 43 49 38Z M56 49 65 47 73 53 72 62 68 68 67 79 62 83 56 73 52 63Z M80 70 88 73 90 79 85 84 78 81 77 75Z" />
           </g>
-          <g className="globe-3d-coastlines">
-            <path d="M12 29 18 21 28 19 33 23 32 29 38 33 35 39 28 39 25 44 18 42 15 36Z" />
-            <path d="M33 47 39 48 42 55 40 62 44 69 40 80 35 75 34 65 30 57Z" />
-            <path d="M48 26 55 20 66 21 71 27 79 29 84 35 80 40 69 39 63 45 55 42 49 37Z" />
-            <path d="M57 48 66 46 73 52 72 61 68 67 67 77 62 81 57 72 53 62Z" />
-            <path d="M80 69 87 72 89 78 84 83 78 80 77 74Z" />
+          <g className="globe-3d-network globe-3d-network-far"><path d="M17 38 Q43 8 79 35" /><path d="M28 59 Q57 77 82 43" /></g>
+          <g className="globe-3d-grid globe-3d-grid-front">
+            <ellipse cx="50" cy="51" rx="40" ry="10" /><ellipse cx="50" cy="63" rx="35" ry="9" />
+            <ellipse cx="50" cy="50" rx="13" ry="40" /><ellipse cx="50" cy="50" rx="27" ry="40" />
           </g>
-        </svg>
-        <div className="globe-3d-network">
-          <span className="globe-3d-path globe-3d-path-a" />
-          <span className="globe-3d-path globe-3d-path-b" />
-          <span className="globe-3d-path globe-3d-path-c" />
-          {nodes.map(([left, top], index) => (
-            <span
-              key={`${left}-${top}`}
-              className={`globe-3d-node globe-3d-node-${index % 3}`}
-              style={{ left: `${left}%`, top: `${top}%` }}
-            />
-          ))}
-        </div>
-        <div className="globe-3d-grid globe-3d-grid-front">
-          {[0, 1, 2].map((index) => <span key={`front-lat-${index}`} className={`globe-3d-latitude globe-3d-front-latitude-${index}`} />)}
-          {[0, 1, 2].map((index) => <span key={`front-lon-${index}`} className={`globe-3d-longitude globe-3d-front-longitude-${index}`} />)}
-        </div>
-        <div className="globe-3d-glow" />
-        <div className="globe-3d-rim" />
-      </div>
+          <g className="globe-3d-network globe-3d-network-front">
+            <path d="M19 42 Q46 68 80 37" /><path d="M26 58 Q47 35 71 54" />
+            {[[20, 42], [31, 28], [43, 50], [57, 35], [70, 54], [80, 37], [62, 70]].map(([cx, cy], index) => (
+              <circle key={`${cx}-${cy}`} className={`globe-3d-node globe-3d-node-${index % 3}`} cx={cx} cy={cy} r={index === 2 || index === 5 ? 1.5 : 1} />
+            ))}
+          </g>
+        </g>
+        <circle className="globe-3d-rim" cx="50" cy="50" r="40" />
+      </svg>
     </div>
   );
 }
