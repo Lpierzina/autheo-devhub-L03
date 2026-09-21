@@ -148,10 +148,16 @@ body {
 .globe-3d-coasts {
   fill: none;
   stroke: var(--globe-cyan);
-  stroke-width: .52;
+  stroke-width: .42;
   stroke-linejoin: round;
   opacity: .9;
   filter: drop-shadow(0 0 1.5px rgb(53 220 255 / .72));
+}
+.globe-3d-borders {
+  fill: none;
+  stroke: #218ec3;
+  stroke-width: .16;
+  opacity: .38;
 }
 .globe-3d-network {
   fill: none;
@@ -185,24 +191,14 @@ body {
   opacity: .82;
   filter: drop-shadow(0 0 4px rgb(53 220 255 / .75));
 }
-/* Two copies of the world repeat seamlessly. Translation represents changing
-   longitude around the Earth's vertical/Y axis; the circular clip, limb fade,
-   and stationary latitude/longitude grid provide the spherical depth cue. */
-.globe-3d-rotor {
-  transform-box: view-box;
-  transform-origin: center;
-  animation: globe-world-rotation 32s linear infinite;
-}
 .globe-3d-card .globe-3d-art { filter: drop-shadow(0 0 12px rgb(22 136 255 / .16)); }
 .globe-3d-card .globe-3d-network { opacity: .48; }
-@keyframes globe-world-rotation { to { transform: translateX(-80%); } }
 @keyframes globe-node-pulse { 0%, 100% { opacity: .42; } 50% { opacity: 1; } }
 @keyframes globe-aura { from { opacity: .38; transform: scale(.985); } to { opacity: .62; transform: scale(1.015); } }
 @media (prefers-reduced-motion: reduce) {
   .globe-3d-grid,
   .globe-3d-node,
-  .globe-3d-aura,
-  .globe-3d-rotor {
+  .globe-3d-aura {
     animation: none;
   }
 }
