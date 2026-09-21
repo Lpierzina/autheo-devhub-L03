@@ -31,7 +31,7 @@ const NETWORK_EDGES: [number, number][] = [
   ...LOCAL_NETWORK_EDGES,
   // Long-distance paths remain sparse enough to read as a network, not a grid.
   [2, 14], [3, 18], [6, 24], [10, 28], [17, 39], [22, 43], [31, 49],
-  [37, 53], [43, 59], [48, 65], [54, 70], [60, 72], [66, 74], [70, 73],
+  [37, 53], [43, 59], [48, 65], [54, 70], [60, 72], [66, 73], [70, 73],
 ];
 
 const DETAIL = {
