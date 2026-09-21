@@ -169,9 +169,9 @@ body {
 }
 .globe-3d-long-link {
   stroke: var(--globe-cyan);
-  stroke-width: .48;
-  stroke-dasharray: 1.2 1.65;
-  opacity: .82;
+  stroke-width: .26;
+  stroke-dasharray: .9 1.75;
+  opacity: .34;
 }
 .globe-3d-node {
   fill: var(--globe-node);
