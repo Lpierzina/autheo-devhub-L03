@@ -16,7 +16,11 @@
         radial-gradient(40% 35% at 75% 80%, rgba(8,145,178,0.18), transparent 70%);
     }
     .card { padding: 40px; max-width: 420px; }
-    img { height: 34px; width: auto; margin-bottom: 24px; opacity: 0.95; }
+    .logo { height: 34px; width: auto; margin-bottom: 18px; opacity: 0.95; }
+    .globe {
+      display: block; width: min(38vw, 154px); height: auto; margin: 0 auto 16px;
+      filter: drop-shadow(0 0 20px rgba(52, 211, 153, 0.18));
+    }
     h1 { font-size: 22px; margin: 0 0 8px; letter-spacing: -0.02em; }
     p { color: #9a9aa2; font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
     button {
@@ -27,7 +31,8 @@
 </head>
 <body>
   <div class="card">
-    <img src="/shadw-logo-dark.png" alt="shadw" />
+    <img class="logo" src="/shadw-logo-dark.png" alt="shadw" />
+    <img class="globe" src="/network-globe.svg" alt="" aria-hidden="true" />
     <h1>You&rsquo;re offline</h1>
     <p>shadw can&rsquo;t reach the network right now. Check your connection and try again — your cached pages still work.</p>
     <button onclick="location.reload()">Retry</button>
