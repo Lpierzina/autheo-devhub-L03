@@ -8,6 +8,7 @@ import { Card, Button, Input } from "@/components/ui";
 import { currentTeam, switchTeam, invalidateApiCache } from "@/lib/api";
 import { TeamSelect } from "@/components/team-picker";
 import { cn } from "@/lib/utils";
+import { DeploymentModelHelp } from "@/components/deployment-model-help";
 
 function slug(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -201,6 +202,7 @@ export default function UploadProjectPage() {
             </div>
           )}
         </div>
+        <DeploymentModelHelp className="mt-5" />
 
         {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
 
