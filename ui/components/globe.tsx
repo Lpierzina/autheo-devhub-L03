@@ -15,9 +15,12 @@ const NETWORK_POINTS: [number, number][] = [
   [18, 59], [31, 30], [55, 25], [77, 28], [103, 1], [139, 35],
 ];
 const NETWORK_EDGES: [number, number][] = [
-  [0, 1], [0, 2], [1, 3], [1, 4], [1, 5], [2, 3], [3, 4], [4, 5],
-  [5, 6], [5, 7], [6, 8], [6, 7], [7, 9], [9, 10], [10, 11], [11, 12],
-  [11, 13], [13, 14], [14, 15], [15, 16], [16, 17], [2, 10], [4, 10],
+  [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [1, 4], [1, 5], [2, 3],
+  [2, 4], [3, 4], [3, 5], [4, 5], [4, 6], [4, 10], [5, 6], [5, 7],
+  [5, 10], [6, 7], [6, 8], [6, 9], [7, 8], [7, 9], [7, 10], [8, 9],
+  [9, 10], [9, 11], [10, 11], [10, 12], [10, 13], [11, 12], [11, 13],
+  [11, 14], [12, 13], [13, 14], [13, 15], [14, 15], [14, 16], [15, 16],
+  [15, 17], [16, 17], [2, 10], [3, 11], [4, 12], [5, 13], [6, 14],
 ];
 
 function greatCircle(from: [number, number], to: [number, number]) {
@@ -87,7 +90,7 @@ export function AnimatedGlobe({
           <path className="globe-3d-coasts" d={drawing.coast} />
           <path className="globe-3d-borders" d={drawing.borders} />
           <g className="globe-3d-network">
-            {drawing.links.map((link, index) => <path key={index} className={index > 19 ? "globe-3d-long-link" : undefined} d={link} />)}
+            {drawing.links.map((link, index) => <path key={index} className={index > 39 ? "globe-3d-long-link" : undefined} d={link} />)}
           </g>
           <g className="globe-3d-nodes">
             {drawing.nodes.map((point, index) => point && <circle key={index} className={`globe-3d-node globe-3d-node-${index % 4}`} cx={point[0]} cy={point[1]} r={index % 7 === 0 ? 1 : .55} />)}
