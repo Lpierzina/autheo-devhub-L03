@@ -142,8 +142,8 @@ body {
 .globe-3d-grid {
   fill: none;
   stroke: #267dab;
-  stroke-width: .28;
-  opacity: .42;
+  stroke-width: .22;
+  opacity: .24;
 }
 .globe-3d-coasts {
   fill: none;
@@ -161,11 +161,11 @@ body {
 }
 .globe-3d-network {
   fill: none;
-  stroke: var(--globe-blue);
-  stroke-width: .3;
+  stroke: #249ee8;
+  stroke-width: .36;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: .58;
+  opacity: .82;
 }
 .globe-3d-long-link {
   stroke: var(--globe-cyan);

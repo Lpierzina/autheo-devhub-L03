@@ -13,14 +13,22 @@ const NETWORK_POINTS: [number, number][] = [
   [-122, 37], [-99, 19], [-74, 40], [-80, 26], [-79, 9], [-77, -12],
   [-58, -34], [-47, -16], [-70, -33], [-46, -23], [-3, 40], [2, 48],
   [18, 59], [31, 30], [55, 25], [77, 28], [103, 1], [139, 35],
+  [-113, 51], [-101, 49], [-88, 47], [-116, 41], [-105, 38], [-93, 36],
+  [-85, 34], [-77, 31], [-112, 29], [-101, 27], [-90, 23], [-83, 20],
+  [-88, 13], [-84, 8], [-79, 4], [-75, -3], [-70, -8], [-65, -14],
+  [-61, -20], [-57, -26], [-54, -31], [-51, -36], [-70, -20], [-61, -6],
 ];
+const LOCAL_NETWORK_EDGES: [number, number][] = NETWORK_POINTS.flatMap((point, index) => (
+  NETWORK_POINTS
+    .map((candidate, candidateIndex) => ({ candidateIndex, distance: (point[0] - candidate[0]) ** 2 + (point[1] - candidate[1]) ** 2 }))
+    .filter(({ candidateIndex }) => candidateIndex > index)
+    .sort((left, right) => left.distance - right.distance)
+    .slice(0, 3)
+    .map(({ candidateIndex }) => [index, candidateIndex] as [number, number])
+));
 const NETWORK_EDGES: [number, number][] = [
-  [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [1, 4], [1, 5], [2, 3],
-  [2, 4], [3, 4], [3, 5], [4, 5], [4, 6], [4, 10], [5, 6], [5, 7],
-  [5, 10], [6, 7], [6, 8], [6, 9], [7, 8], [7, 9], [7, 10], [8, 9],
-  [9, 10], [9, 11], [10, 11], [10, 12], [10, 13], [11, 12], [11, 13],
-  [11, 14], [12, 13], [13, 14], [13, 15], [14, 15], [14, 16], [15, 16],
-  [15, 17], [16, 17], [2, 10], [3, 11], [4, 12], [5, 13], [6, 14],
+  ...LOCAL_NETWORK_EDGES,
+  [2, 10], [3, 11], [4, 12], [5, 13], [6, 14], [7, 15], [9, 16],
 ];
 
 function greatCircle(from: [number, number], to: [number, number]) {
@@ -90,7 +98,7 @@ export function AnimatedGlobe({
           <path className="globe-3d-coasts" d={drawing.coast} />
           <path className="globe-3d-borders" d={drawing.borders} />
           <g className="globe-3d-network">
-            {drawing.links.map((link, index) => <path key={index} className={index > 39 ? "globe-3d-long-link" : undefined} d={link} />)}
+            {drawing.links.map((link, index) => <path key={index} className={index >= LOCAL_NETWORK_EDGES.length ? "globe-3d-long-link" : undefined} d={link} />)}
           </g>
           <g className="globe-3d-nodes">
             {drawing.nodes.map((point, index) => point && <circle key={index} className={`globe-3d-node globe-3d-node-${index % 4}`} cx={point[0]} cy={point[1]} r={index % 7 === 0 ? 1 : .55} />)}
