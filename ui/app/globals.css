@@ -107,15 +107,14 @@ body {
     linear-gradient(to bottom, hsl(var(--foreground) / 0.015) 1px, transparent 1px);
 }
 
-/* ---- Stenciled world-network globe ----
+/* ---- Digital network Earth ----
    The host establishes a square layout box. Its SVG has a square viewBox and
    `preserveAspectRatio`, preventing flex/grid parents from ever stretching the
    globe's silhouette at responsive widths. */
 .globe-3d {
-  --globe-green: #239f68;
-  --globe-mint: #c4f4d9;
-  --globe-emerald: #36dc8c;
-  --globe-blue: #51d6f5;
+  --globe-cyan: #35dcff;
+  --globe-blue: #1688ff;
+  --globe-node: #9cf4ff;
   position: relative;
   display: grid;
   place-items: center;
@@ -128,100 +127,82 @@ body {
   width: 100%;
   height: 100%;
   overflow: visible;
-  filter: drop-shadow(0 0 18px rgb(42 205 142 / .12));
+  filter: drop-shadow(0 0 18px rgb(22 136 255 / .2));
 }
 .globe-3d-aura {
   fill: none;
-  stroke: var(--globe-green);
-  stroke-width: .5;
-  opacity: .25;
+  stroke: var(--globe-blue);
+  stroke-width: .65;
+  opacity: .52;
+  filter: drop-shadow(0 0 5px rgb(53 220 255 / .7));
   transform-origin: 50px 50px;
   animation: globe-aura 7s ease-in-out infinite alternate;
 }
 .globe-3d-base { opacity: 1; }
 .globe-3d-grid {
   fill: none;
-  stroke: var(--globe-mint);
-  stroke-width: .34;
-}
-.globe-3d-grid-far { opacity: .22; }
-.globe-3d-grid-front { opacity: .48; }
-.globe-3d-world {
-  fill: var(--globe-green);
-  opacity: .48;
-  filter: drop-shadow(0 0 2px rgb(48 220 139 / .28));
-}
-.globe-3d-map {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: globe-map-spin 38s linear infinite;
+  stroke: #267dab;
+  stroke-width: .28;
+  opacity: .42;
 }
 .globe-3d-coasts {
   fill: none;
-  stroke: var(--globe-mint);
-  stroke-width: .45;
-  stroke-dasharray: 1.2 1.5;
+  stroke: var(--globe-cyan);
+  stroke-width: .52;
+  stroke-linejoin: round;
+  opacity: .9;
+  filter: drop-shadow(0 0 1.5px rgb(53 220 255 / .72));
+}
+.globe-3d-network {
+  fill: none;
+  stroke: var(--globe-blue);
+  stroke-width: .3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   opacity: .58;
 }
-.globe-3d-network { fill: none; stroke-linecap: round; }
-.globe-3d-network-far {
-  stroke: var(--globe-blue);
-  stroke-width: .52;
-  stroke-dasharray: 1.2 2.1;
-  opacity: .24;
-}
-.globe-3d-network-front {
-  stroke: var(--globe-blue);
-  stroke-width: .78;
-  opacity: .86;
-  filter: drop-shadow(0 0 2px rgb(81 214 245 / .65));
-  animation: globe-network-drift 12s ease-in-out infinite alternate;
+.globe-3d-long-link {
+  stroke: var(--globe-cyan);
+  stroke-width: .48;
+  stroke-dasharray: 1.2 1.65;
+  opacity: .82;
 }
 .globe-3d-node {
-  fill: var(--globe-emerald);
-  stroke: #d8ffe8;
-  stroke-width: .35;
+  fill: var(--globe-node);
+  stroke: var(--globe-cyan);
+  stroke-width: .16;
   transform-origin: center;
-  filter: drop-shadow(0 0 2px rgb(54 220 140 / .9));
-  animation: globe-node-pulse 2.8s ease-in-out infinite;
+  filter: drop-shadow(0 0 1.5px rgb(53 220 255 / .95));
+  animation: globe-node-pulse 3.6s ease-in-out infinite;
 }
-.globe-3d-node-1 { animation-delay: -.9s; opacity: .68; }
+.globe-3d-node-1 { animation-delay: -.9s; opacity: .65; }
 .globe-3d-node-2 { animation-delay: -1.7s; opacity: .5; }
+.globe-3d-node-3 { animation-delay: -2.5s; opacity: .72; }
 .globe-3d-rim {
   fill: none;
-  stroke: var(--globe-mint);
-  stroke-width: .55;
-  opacity: .67;
-  filter: drop-shadow(2px 0 3px rgb(81 214 245 / .38));
+  stroke: var(--globe-cyan);
+  stroke-width: .7;
+  opacity: .82;
+  filter: drop-shadow(0 0 4px rgb(53 220 255 / .75));
 }
-.globe-3d-orbit {
-  fill: none;
-  stroke: var(--globe-blue);
-  stroke-width: .48;
-  stroke-dasharray: 8 5 1 5;
-  opacity: .46;
-  transform-origin: 50px 50px;
-  animation: globe-orbit 13s linear infinite;
+/* Two copies of the world repeat seamlessly. Translation represents changing
+   longitude around the Earth's vertical/Y axis; the circular clip, limb fade,
+   and stationary latitude/longitude grid provide the spherical depth cue. */
+.globe-3d-rotor {
+  transform-box: view-box;
+  transform-origin: center;
+  animation: globe-world-rotation 32s linear infinite;
 }
-.globe-3d-orbit-back { opacity: .22; transform: rotate(-18deg); }
-.globe-3d-orbit-front { stroke: var(--globe-mint); opacity: .44; animation-direction: reverse; }
-.globe-3d-card .globe-3d-art { filter: drop-shadow(0 0 10px rgb(42 205 142 / .09)); }
-.globe-3d-card .globe-3d-world { opacity: .4; }
-.globe-3d-card .globe-3d-network-front { opacity: .64; }
-@keyframes globe-orbit { to { transform: rotate(360deg); } }
-@keyframes globe-map-spin {
-  to { transform: rotate(360deg); }
-}
-@keyframes globe-network-drift { from { translate: -1px 1px; } to { translate: 1px -1px; } }
+.globe-3d-card .globe-3d-art { filter: drop-shadow(0 0 12px rgb(22 136 255 / .16)); }
+.globe-3d-card .globe-3d-network { opacity: .48; }
+@keyframes globe-world-rotation { to { transform: translateX(-80%); } }
 @keyframes globe-node-pulse { 0%, 100% { opacity: .42; } 50% { opacity: 1; } }
-@keyframes globe-aura { from { opacity: .16; transform: scale(.98); } to { opacity: .32; transform: scale(1.025); } }
+@keyframes globe-aura { from { opacity: .38; transform: scale(.985); } to { opacity: .62; transform: scale(1.015); } }
 @media (prefers-reduced-motion: reduce) {
-  .globe-3d-orbit,
   .globe-3d-grid,
-  .globe-3d-network,
   .globe-3d-node,
   .globe-3d-aura,
-  .globe-3d-map {
+  .globe-3d-rotor {
     animation: none;
   }
 }
