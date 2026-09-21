@@ -1,11 +1,47 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { geoGraticule10, geoInterpolate, geoOrthographic, geoPath } from "d3-geo";
+import { feature, mesh } from "topojson-client";
+import worldAtlas from "world-atlas/land-110m.json";
+import type { GeometryObject, Topology } from "topojson-specification";
 
+const WORLD = worldAtlas as unknown as Topology;
+const LAND = feature(WORLD, "land");
+const COAST_MESH = mesh(WORLD, WORLD.objects.land as unknown as GeometryObject);
+const NETWORK_POINTS: [number, number][] = [
+  [-122, 37], [-99, 19], [-74, 40], [-80, 26], [-79, 9], [-77, -12],
+  [-58, -34], [-47, -16], [-70, -33], [-46, -23], [-3, 40], [2, 48],
+  [18, 59], [31, 30], [55, 25], [77, 28], [103, 1], [139, 35],
+  [-113, 51], [-101, 49], [-88, 47], [-116, 41], [-105, 38], [-93, 36],
+  [-85, 34], [-77, 31], [-112, 29], [-101, 27], [-90, 23], [-83, 20],
+  [-88, 13], [-84, 8], [-79, 4], [-75, -3], [-70, -8], [-65, -14],
+  [-61, -20], [-57, -26], [-54, -31], [-51, -36], [-70, -20], [-61, -6],
+];
+const LOCAL_NETWORK_EDGES: [number, number][] = NETWORK_POINTS.flatMap((point, index) => (
+  NETWORK_POINTS
+    .map((candidate, candidateIndex) => ({ candidateIndex, distance: (point[0] - candidate[0]) ** 2 + (point[1] - candidate[1]) ** 2 }))
+    .filter(({ candidateIndex }) => candidateIndex > index)
+    .sort((left, right) => left.distance - right.distance)
+    .slice(0, 3)
+    .map(({ candidateIndex }) => [index, candidateIndex] as [number, number])
+));
+const NETWORK_EDGES: [number, number][] = [
+  ...LOCAL_NETWORK_EDGES,
+  [2, 10], [3, 11], [4, 12], [5, 13], [6, 14], [7, 15], [9, 16],
+];
+
+function greatCircle(from: [number, number], to: [number, number]) {
+  const interpolate = geoInterpolate(from, to);
+  return {
+    type: "LineString" as const,
+    coordinates: Array.from({ length: 17 }, (_, index) => interpolate(index / 16)),
+  };
+}
 
 /**
- * A compact SVG globe uses compositor-friendly transforms rather than a
- * JavaScript animation loop, keeping the network visual lively at any size.
+ * A real orthographic globe. d3's longitude rotation moves coastlines, mesh,
+ * and points together around the vertical/Y axis while the camera stays fixed.
  */
 export function AnimatedGlobe({
   className = "",
@@ -14,57 +50,58 @@ export function AnimatedGlobe({
   className?: string;
   variant?: "hero" | "card";
 }) {
-  const isHero = variant === "hero";
   const id = useId().replaceAll(":", "");
+  const [longitude, setLongitude] = useState(75);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const startedAt = performance.now();
+    let frame = 0;
+    const rotate = (now: number) => {
+      setLongitude(75 + ((now - startedAt) / 32_000) * 360);
+      frame = requestAnimationFrame(rotate);
+    };
+    frame = requestAnimationFrame(rotate);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  const drawing = useMemo(() => {
+    const projection = geoOrthographic()
+      .translate([50, 50])
+      .scale(39.5)
+      .rotate([longitude, -8])
+      .clipAngle(90)
+      .precision(0.25);
+    const path = geoPath(projection);
+    return {
+      coast: path(LAND) ?? "",
+      borders: path(COAST_MESH) ?? "",
+      grid: path(geoGraticule10()) ?? "",
+      links: NETWORK_EDGES.map(([from, to]) => path(greatCircle(NETWORK_POINTS[from], NETWORK_POINTS[to])) ?? ""),
+      nodes: NETWORK_POINTS.map((point) => projection(point)),
+    };
+  }, [longitude]);
 
   return (
     <div className={`globe-3d globe-3d-${variant} ${className}`} aria-hidden="true">
       <svg className="globe-3d-art" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
         <defs>
           <clipPath id={`${id}-clip`}><circle cx="50" cy="50" r="40" /></clipPath>
-          <radialGradient id={`${id}-atmosphere`} cx="34%" cy="28%" r="72%">
-            <stop offset="0%" stopColor="var(--globe-mint)" stopOpacity=".18" />
-            <stop offset="66%" stopColor="var(--globe-green)" stopOpacity=".025" />
-            <stop offset="100%" stopColor="var(--globe-blue)" stopOpacity=".1" />
+          <radialGradient id={`${id}-atmosphere`} cx="38%" cy="30%" r="72%">
+            <stop offset="0%" stopColor="#0a3650" stopOpacity=".72" /><stop offset="58%" stopColor="#041722" stopOpacity=".94" /><stop offset="100%" stopColor="#01060b" />
           </radialGradient>
-          <mask id={`${id}-continent-stencil`}>
-            <rect width="100" height="100" fill="black" />
-            {/* Recognizable coastlines, simplified enough to stay crisp at card scale. */}
-            <path fill="white" d="M12 33 16 27 21 25 24 20 31 20 36 24 35 28 40 30 42 35 38 39 33 39 30 44 25 43 22 47 17 43 16 38 12 36Z M27 48 33 48 38 53 40 59 38 64 42 69 40 76 36 82 32 77 33 70 29 63 27 57 24 53Z M47 25 52 20 58 20 62 24 67 23 72 27 78 27 82 31 87 33 89 38 85 41 79 40 75 43 70 42 66 46 61 43 56 44 52 40 48 38Z M57 48 62 46 67 48 71 52 70 57 67 60 68 66 65 70 65 77 61 82 58 78 56 71 53 66 54 59 51 55Z M75 58 80 57 83 60 82 64 78 65Z M78 72 85 72 89 76 88 81 83 84 78 81 76 76Z M44 17 47 14 51 15 53 18 50 21 46 20Z" />
-            {/* Slots turn the land layer into a transparent technical stencil. */}
-            <path fill="black" d="M19 30h8v2h-8Zm10-4h4v3h-4Zm-1 12h8v2h-8Zm7 16h5v3h-5Zm2 10h5v2h-5Zm15-34h8v2h-8Zm13-2h9v3h-9Zm5 11h8v2h-8Zm-8 15h7v3h-7Zm0 12h6v2h-6Zm18 10h6v2h-6Z" />
-          </mask>
         </defs>
-
-        <circle className="globe-3d-aura" cx="50" cy="50" r="46" />
-        <g className="globe-3d-orbits">
-          <ellipse className="globe-3d-orbit globe-3d-orbit-back" cx="50" cy="50" rx="48" ry="13" />
-          {isHero && <ellipse className="globe-3d-orbit globe-3d-orbit-front" cx="50" cy="50" rx="54" ry="20" />}
-        </g>
+        <circle className="globe-3d-aura" cx="50" cy="50" r="44" />
         <g clipPath={`url(#${id}-clip)`}>
           <circle className="globe-3d-base" cx="50" cy="50" r="40" fill={`url(#${id}-atmosphere)`} />
-          <g className="globe-3d-grid globe-3d-grid-far">
-            <ellipse cx="50" cy="27" rx="25" ry="7" /><ellipse cx="50" cy="39" rx="36" ry="9" />
-            <ellipse cx="50" cy="51" rx="40" ry="10" /><ellipse cx="50" cy="63" rx="35" ry="9" />
-            <ellipse cx="50" cy="75" rx="24" ry="7" />
-            <ellipse cx="50" cy="50" rx="13" ry="40" /><ellipse cx="50" cy="50" rx="27" ry="40" /><ellipse cx="50" cy="50" rx="39" ry="40" />
+          <path className="globe-3d-grid" d={drawing.grid} />
+          <path className="globe-3d-coasts" d={drawing.coast} />
+          <path className="globe-3d-borders" d={drawing.borders} />
+          <g className="globe-3d-network">
+            {drawing.links.map((link, index) => <path key={index} className={index >= LOCAL_NETWORK_EDGES.length ? "globe-3d-long-link" : undefined} d={link} />)}
           </g>
-          <g className="globe-3d-map">
-          <g className="globe-3d-world" mask={`url(#${id}-continent-stencil)`}><rect x="10" y="10" width="80" height="80" /></g>
-          <g className="globe-3d-coasts">
-            <path d="M12 33 16 27 21 25 24 20 31 20 36 24 35 28 40 30 42 35 38 39 33 39 30 44 25 43 22 47 17 43 16 38 12 36Z M27 48 33 48 38 53 40 59 38 64 42 69 40 76 36 82 32 77 33 70 29 63 27 57 24 53Z M47 25 52 20 58 20 62 24 67 23 72 27 78 27 82 31 87 33 89 38 85 41 79 40 75 43 70 42 66 46 61 43 56 44 52 40 48 38Z M57 48 62 46 67 48 71 52 70 57 67 60 68 66 65 70 65 77 61 82 58 78 56 71 53 66 54 59 51 55Z M75 58 80 57 83 60 82 64 78 65Z M78 72 85 72 89 76 88 81 83 84 78 81 76 76Z M44 17 47 14 51 15 53 18 50 21 46 20Z" />
-          </g>
-          <g className="globe-3d-network globe-3d-network-far"><path d="M17 38 Q43 8 79 35" /><path d="M28 59 Q57 77 82 43" /></g>
-          <g className="globe-3d-grid globe-3d-grid-front">
-            <ellipse cx="50" cy="51" rx="40" ry="10" /><ellipse cx="50" cy="63" rx="35" ry="9" />
-            <ellipse cx="50" cy="50" rx="13" ry="40" /><ellipse cx="50" cy="50" rx="27" ry="40" />
-          </g>
-          <g className="globe-3d-network globe-3d-network-front">
-            <path d="M19 42 Q46 68 80 37" /><path d="M26 58 Q47 35 71 54" />
-            {[[20, 42], [31, 28], [43, 50], [57, 35], [70, 54], [80, 37], [62, 70]].map(([cx, cy], index) => (
-              <circle key={`${cx}-${cy}`} className={`globe-3d-node globe-3d-node-${index % 3}`} cx={cx} cy={cy} r={index === 2 || index === 5 ? 1.5 : 1} />
-            ))}
-          </g>
+          <g className="globe-3d-nodes">
+            {drawing.nodes.map((point, index) => point && <circle key={index} className={`globe-3d-node globe-3d-node-${index % 4}`} cx={point[0]} cy={point[1]} r={index % 7 === 0 ? 1 : .55} />)}
           </g>
         </g>
         <circle className="globe-3d-rim" cx="50" cy="50" r="40" />

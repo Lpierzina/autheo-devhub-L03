@@ -104,7 +104,7 @@ export function OpeningSplash() {
   // Square container plus the globe SVG's square viewBox preserves the circle
   // at every viewport size; it is intentionally much larger than the Projects
   // empty-state version so Refresh reads as a branded hero.
-  const size = "min(64rem, 112vw)";
+  const size = "min(56rem, 104vw)";
   return (
     // NOTE: `position:fixed` is a TRAP here — MarketingShell's page wrapper is
     // CSS-transformed (`-translate-x-1/2`), which turns any fixed descendant
@@ -121,7 +121,7 @@ export function OpeningSplash() {
         right: 0,
         height: "100vh",
         zIndex: 100,
-        background: "#050b07",
+        background: "#01060b",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -149,7 +149,7 @@ export function OpeningSplash() {
             top: "50%",
             width: "154%",
             transform: "translate(-50%, -55%)",
-            color: "#86efac",
+            color: "#35dcff",
             // Deliberately exceeds the sphere's silhouette at desktop widths:
             // the mark is a background hero layer, not a caption.
             fontSize: "clamp(5.25rem, 20vw, 18rem)",
@@ -176,7 +176,7 @@ export function OpeningSplash() {
             letterSpacing: "0.12em",
             fontWeight: 600,
             textTransform: "uppercase",
-            color: "#bbf7d0",
+            color: "#9cf4ff",
           }}
         >
           Loading your cloud
