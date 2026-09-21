@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { geoGraticule10, geoInterpolate, geoOrthographic, geoPath } from "d3-geo";
+import { geoGraticule, geoInterpolate, geoOrthographic, geoPath } from "d3-geo";
 import { feature, mesh } from "topojson-client";
 import worldAtlas from "world-atlas/land-110m.json";
 import type { GeometryObject, Topology } from "topojson-specification";
@@ -10,13 +10,14 @@ const WORLD = worldAtlas as unknown as Topology;
 const LAND = feature(WORLD, "land");
 const COAST_MESH = mesh(WORLD, WORLD.objects.land as unknown as GeometryObject);
 const NETWORK_POINTS: [number, number][] = [
-  [-122, 37], [-99, 19], [-74, 40], [-80, 26], [-79, 9], [-77, -12],
-  [-58, -34], [-47, -16], [-70, -33], [-46, -23], [-3, 40], [2, 48],
-  [18, 59], [31, 30], [55, 25], [77, 28], [103, 1], [139, 35],
-  [-113, 51], [-101, 49], [-88, 47], [-116, 41], [-105, 38], [-93, 36],
-  [-85, 34], [-77, 31], [-112, 29], [-101, 27], [-90, 23], [-83, 20],
-  [-88, 13], [-84, 8], [-79, 4], [-75, -3], [-70, -8], [-65, -14],
-  [-61, -20], [-57, -26], [-54, -31], [-51, -36], [-70, -20], [-61, -6],
+  // North America, Central America, and the Caribbean.
+  [-122, 37], [-118, 34], [-113, 51], [-112, 29], [-108, 40], [-105, 38], [-101, 49], [-101, 27], [-99, 19], [-96, 32], [-93, 36], [-90, 23], [-88, 47], [-88, 13], [-85, 34], [-84, 8], [-83, 20], [-80, 26], [-79, 9], [-77, 31], [-74, 40],
+  // South America.
+  [-79, 4], [-77, -12], [-75, -3], [-74, -12], [-70, -8], [-70, -20], [-70, -33], [-65, -14], [-61, -20], [-61, -6], [-58, -34], [-54, -31], [-51, -36], [-47, -16], [-46, -23],
+  // Europe, Africa, and the Mediterranean.
+  [-10, 52], [-3, 40], [-1, 52], [2, 48], [8, 51], [12, 42], [18, 59], [20, 45], [24, 38], [31, 30], [31, 6], [36, -1], [39, 9], [18, 15], [10, 5], [0, 7], [-1, 18], [18, -34], [28, -26],
+  // Asia and Oceania.
+  [41, 55], [46, 25], [55, 25], [67, 24], [72, 19], [77, 28], [78, 22], [90, 23], [103, 1], [105, 21], [110, 35], [116, 40], [121, 14], [127, 37], [139, 35], [144, 13], [151, -33], [133, -24], [115, -32],
 ];
 const LOCAL_NETWORK_EDGES: [number, number][] = NETWORK_POINTS.flatMap((point, index) => (
   NETWORK_POINTS
@@ -28,8 +29,15 @@ const LOCAL_NETWORK_EDGES: [number, number][] = NETWORK_POINTS.flatMap((point, i
 ));
 const NETWORK_EDGES: [number, number][] = [
   ...LOCAL_NETWORK_EDGES,
-  [2, 10], [3, 11], [4, 12], [5, 13], [6, 14], [7, 15], [9, 16],
+  // Long-distance paths remain sparse enough to read as a network, not a grid.
+  [2, 14], [3, 18], [6, 24], [10, 28], [17, 39], [22, 43], [31, 49],
+  [37, 53], [43, 59], [48, 65], [54, 70], [60, 72], [66, 73], [70, 73],
 ];
+
+const DETAIL = {
+  card: { gridStep: [15, 15] as [number, number], secondaryNodeEvery: 3 },
+  hero: { gridStep: [10, 10] as [number, number], secondaryNodeEvery: 2 },
+};
 
 function greatCircle(from: [number, number], to: [number, number]) {
   const interpolate = geoInterpolate(from, to);
@@ -52,6 +60,7 @@ export function AnimatedGlobe({
 }) {
   const id = useId().replaceAll(":", "");
   const [longitude, setLongitude] = useState(75);
+  const detail = DETAIL[variant];
 
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -71,16 +80,16 @@ export function AnimatedGlobe({
       .scale(39.5)
       .rotate([longitude, -8])
       .clipAngle(90)
-      .precision(0.25);
+      .precision(0.15);
     const path = geoPath(projection);
     return {
       coast: path(LAND) ?? "",
       borders: path(COAST_MESH) ?? "",
-      grid: path(geoGraticule10()) ?? "",
+      grid: path(geoGraticule().step(detail.gridStep)()) ?? "",
       links: NETWORK_EDGES.map(([from, to]) => path(greatCircle(NETWORK_POINTS[from], NETWORK_POINTS[to])) ?? ""),
       nodes: NETWORK_POINTS.map((point) => projection(point)),
     };
-  }, [longitude]);
+  }, [detail.gridStep, longitude]);
 
   return (
     <div className={`globe-3d globe-3d-${variant} ${className}`} aria-hidden="true">
@@ -102,6 +111,7 @@ export function AnimatedGlobe({
           </g>
           <g className="globe-3d-nodes">
             {drawing.nodes.map((point, index) => point && <circle key={index} className={`globe-3d-node globe-3d-node-${index % 4}`} cx={point[0]} cy={point[1]} r={index % 7 === 0 ? 1 : .55} />)}
+            {drawing.nodes.map((point, index) => point && index % detail.secondaryNodeEvery === 0 && <circle key={`secondary-${index}`} className="globe-3d-secondary-node" cx={point[0]} cy={point[1]} r=".28" />)}
           </g>
         </g>
         <circle className="globe-3d-rim" cx="50" cy="50" r="40" />
@@ -120,7 +130,7 @@ export function GlobeEmptyState({ title, desc }: { title: string; desc?: string 
           {desc ? <p className="mt-1.5 text-sm text-secondary">{desc}</p> : null}
         </div>
       )}
-      <div className="pointer-events-none mt-6 flex h-52 items-end justify-center sm:h-64">
+      <div className="pointer-events-none mt-7 flex h-64 justify-center sm:h-80">
         <AnimatedGlobe className="h-64 w-64 shrink-0 sm:h-80 sm:w-80" />
       </div>
     </div>
