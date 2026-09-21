@@ -107,262 +107,112 @@ body {
     linear-gradient(to bottom, hsl(var(--foreground) / 0.015) 1px, transparent 1px);
 }
 
-/* ---- Dashboard globe ----
-   This is scoped to .globe-3d. It deliberately does not touch body background
-   sizing or positioning: the workshop illustration remains exactly as served
-   before the globe was introduced. */
+/* ---- Stenciled world-network globe ----
+   The host establishes a square layout box. Its SVG has a square viewBox and
+   `preserveAspectRatio`, preventing flex/grid parents from ever stretching the
+   globe's silhouette at responsive widths. */
 .globe-3d {
-  --globe-line: hsl(var(--accent) / 0.38);
-  --globe-bright-line: hsl(var(--accent) / 0.68);
-  --globe-fill: hsl(var(--accent) / 0.07);
+  --globe-green: #239f68;
+  --globe-mint: #c4f4d9;
+  --globe-emerald: #36dc8c;
+  --globe-blue: #51d6f5;
   position: relative;
   display: grid;
   place-items: center;
-  container-type: size;
-  perspective: 900px;
+  aspect-ratio: 1;
+  min-width: 0;
   isolation: isolate;
-  transform-style: preserve-3d;
+}
+.globe-3d-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 0 18px rgb(42 205 142 / .12));
 }
 .globe-3d-aura {
-  position: absolute;
-  width: 92cqmin;
-  height: 92cqmin;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle, hsl(var(--accent) / 0.14) 0 18%, hsl(var(--accent) / 0.05) 40%, transparent 70%);
-  filter: blur(16px);
-  opacity: 0.9;
-  transform: translateZ(-40px) scale(1.08);
+  fill: none;
+  stroke: var(--globe-green);
+  stroke-width: .5;
+  opacity: .25;
+  transform-origin: 50px 50px;
   animation: globe-aura 7s ease-in-out infinite alternate;
 }
-.globe-3d-sphere {
-  position: relative;
-  z-index: 1;
-  width: 76cqmin;
-  height: 76cqmin;
-  overflow: hidden;
-  border: 1px solid hsl(var(--accent) / 0.52);
-  border-radius: 50%;
-  background:
-    radial-gradient(ellipse at 31% 25%, hsl(var(--accent) / 0.28), transparent 25%),
-    radial-gradient(ellipse at 46% 42%, hsl(var(--accent) / 0.13), transparent 47%),
-    linear-gradient(122deg, hsl(var(--accent) / 0.13), transparent 48%, hsl(151 40% 3% / 0.5) 78%),
-    var(--globe-fill);
-  box-shadow:
-    inset 24px 18px 34px hsl(var(--accent) / 0.11),
-    inset -34px -24px 46px hsl(151 40% 3% / 0.64),
-    inset 0 0 22px hsl(var(--accent) / 0.14),
-    0 0 26px hsl(var(--accent) / 0.16),
-    0 0 64px hsl(var(--accent) / 0.09);
-  transform-style: preserve-3d;
-  animation: globe-turn 18s ease-in-out infinite alternate;
-}
-.globe-3d-sphere::before,
-.globe-3d-sphere::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-}
-.globe-3d-sphere::before {
-  z-index: 5;
-  background: radial-gradient(ellipse at 34% 25%, transparent 0 50%, hsl(151 45% 3% / 0.18) 78%, hsl(151 45% 3% / 0.66) 100%);
-  mix-blend-mode: multiply;
-}
-.globe-3d-sphere::after {
-  z-index: 6;
-  box-shadow: inset 0 0 0 1px hsl(var(--accent) / 0.14), inset 8px 7px 14px hsl(var(--accent) / 0.12);
-}
-.globe-3d-inner-light {
-  position: absolute;
-  inset: 14%;
-  border-radius: 50%;
-  background: radial-gradient(circle at 38% 32%, hsl(var(--accent) / 0.32), transparent 64%);
-  filter: blur(12px);
-  opacity: 0.85;
-  transform: translateZ(-22px);
-}
-.globe-3d-landmasses {
-  position: absolute;
-  z-index: 2;
-  inset: 9%;
-  width: 82%;
-  height: 82%;
-  overflow: visible;
-  opacity: 0.84;
-  transform: rotate(-4deg) translateZ(5px);
-  animation: globe-land-drift 18s ease-in-out infinite alternate;
-}
-.globe-3d-landmass-fill {
-  fill: hsl(var(--accent) / 0.22);
-  filter: drop-shadow(0 0 3px hsl(var(--accent) / 0.32));
-}
-.globe-3d-landmass-cuts {
-  fill: hsl(151 40% 3% / 0.78);
-}
-.globe-3d-coastlines {
-  fill: none;
-  stroke: hsl(var(--accent) / 0.64);
-  stroke-width: 0.7;
-  stroke-linejoin: round;
-  stroke-dasharray: 1.4 1.2;
-  opacity: 0.9;
-}
+.globe-3d-base { opacity: 1; }
 .globe-3d-grid {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  animation: globe-grid-drift 18s ease-in-out infinite alternate;
+  fill: none;
+  stroke: var(--globe-mint);
+  stroke-width: .34;
 }
-.globe-3d-grid-back {
-  opacity: 0.3;
-  transform: rotateY(-25deg) rotateX(9deg) translateZ(-14px);
+.globe-3d-grid-far { opacity: .22; }
+.globe-3d-grid-front { opacity: .48; }
+.globe-3d-world {
+  fill: var(--globe-green);
+  opacity: .48;
+  filter: drop-shadow(0 0 2px rgb(48 220 139 / .28));
 }
-.globe-3d-grid-front {
-  z-index: 3;
-  opacity: 0.76;
-  transform: rotateY(-12deg) rotateX(7deg) translateZ(13px);
+.globe-3d-coasts {
+  fill: none;
+  stroke: var(--globe-mint);
+  stroke-width: .45;
+  stroke-dasharray: 1.2 1.5;
+  opacity: .58;
 }
-.globe-3d-latitude,
-.globe-3d-longitude {
-  position: absolute;
-  display: block;
-  border: 1px solid var(--globe-line);
-  box-shadow: 0 0 6px hsl(var(--accent) / 0.12);
+.globe-3d-network { fill: none; stroke-linecap: round; }
+.globe-3d-network-far {
+  stroke: var(--globe-blue);
+  stroke-width: .52;
+  stroke-dasharray: 1.2 2.1;
+  opacity: .24;
 }
-.globe-3d-latitude {
-  left: 3%;
-  width: 94%;
-  height: 24%;
-  border-radius: 50%;
-}
-.globe-3d-latitude-0 { top: 5%; transform: scaleX(0.58); }
-.globe-3d-latitude-1 { top: 22%; transform: scaleX(0.82); }
-.globe-3d-latitude-2 { top: 38%; }
-.globe-3d-latitude-3 { top: 54%; transform: scaleX(0.82); }
-.globe-3d-latitude-4 { top: 71%; transform: scaleX(0.58); }
-.globe-3d-longitude {
-  top: 2%;
-  height: 96%;
-  width: 34%;
-  border-radius: 50%;
-  transform: rotateY(50deg);
-}
-.globe-3d-longitude-0 { left: -3%; }
-.globe-3d-longitude-1 { left: 14%; }
-.globe-3d-longitude-2 { left: 33%; }
-.globe-3d-longitude-3 { left: 52%; }
-.globe-3d-longitude-4 { left: 69%; }
-.globe-3d-front-latitude-0 { top: 23%; left: 10%; width: 80%; height: 18%; border-color: hsl(var(--accent) / 0.36); }
-.globe-3d-front-latitude-1 { top: 43%; left: 5%; width: 90%; height: 20%; border-color: var(--globe-bright-line); }
-.globe-3d-front-latitude-2 { top: 64%; left: 12%; width: 76%; height: 16%; border-color: hsl(var(--accent) / 0.38); }
-.globe-3d-front-longitude-0 { left: 22%; width: 44%; border-color: hsl(var(--accent) / 0.36); }
-.globe-3d-front-longitude-1 { left: 38%; width: 25%; border-color: var(--globe-bright-line); }
-.globe-3d-front-longitude-2 { left: 53%; width: 44%; border-color: hsl(var(--accent) / 0.36); }
-.globe-3d-network {
-  position: absolute;
-  z-index: 2;
-  inset: 9%;
-  border-radius: 50%;
-  opacity: 0.9;
-  transform: rotate(-13deg) translateZ(8px);
+.globe-3d-network-front {
+  stroke: var(--globe-blue);
+  stroke-width: .78;
+  opacity: .86;
+  filter: drop-shadow(0 0 2px rgb(81 214 245 / .65));
   animation: globe-network-drift 12s ease-in-out infinite alternate;
 }
 .globe-3d-node {
-  position: absolute;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: hsl(var(--accent) / 0.92);
-  box-shadow: 0 0 0 2px hsl(var(--accent) / 0.12), 0 0 9px hsl(var(--accent) / 0.8);
+  fill: var(--globe-emerald);
+  stroke: #d8ffe8;
+  stroke-width: .35;
+  transform-origin: center;
+  filter: drop-shadow(0 0 2px rgb(54 220 140 / .9));
   animation: globe-node-pulse 2.8s ease-in-out infinite;
 }
-.globe-3d-node-1 { animation-delay: -0.9s; opacity: 0.68; }
-.globe-3d-node-2 { animation-delay: -1.7s; opacity: 0.46; transform: scale(0.8); }
-.globe-3d-path {
-  position: absolute;
-  height: 1px;
-  transform-origin: left center;
-  background: linear-gradient(90deg, transparent, hsl(var(--accent) / 0.58), transparent);
-  box-shadow: 0 0 8px hsl(var(--accent) / 0.3);
-}
-.globe-3d-path-a { top: 30%; left: 18%; width: 60%; transform: rotate(-12deg); }
-.globe-3d-path-b { top: 54%; left: 19%; width: 57%; transform: rotate(15deg); }
-.globe-3d-path-c { top: 66%; left: 29%; width: 42%; transform: rotate(-39deg); opacity: 0.72; }
-.globe-3d-glow {
-  position: absolute;
-  z-index: 4;
-  inset: 18%;
-  border-radius: 50%;
-  background: radial-gradient(circle at 36% 30%, hsl(var(--accent) / 0.24), transparent 67%);
-  filter: blur(13px);
-  transform: translateZ(12px);
-  pointer-events: none;
-}
+.globe-3d-node-1 { animation-delay: -.9s; opacity: .68; }
+.globe-3d-node-2 { animation-delay: -1.7s; opacity: .5; }
 .globe-3d-rim {
-  position: absolute;
-  z-index: 7;
-  inset: -1px;
-  border-radius: 50%;
-  border: 1px solid hsl(var(--accent) / 0.32);
-  box-shadow: inset -10px -6px 16px hsl(151 45% 3% / 0.46), 0 0 14px hsl(var(--accent) / 0.22);
-  pointer-events: none;
+  fill: none;
+  stroke: var(--globe-mint);
+  stroke-width: .55;
+  opacity: .67;
+  filter: drop-shadow(2px 0 3px rgb(81 214 245 / .38));
 }
 .globe-3d-orbit {
-  position: absolute;
-  z-index: 4;
-  width: 108cqmin;
-  height: 32cqmin;
-  border: 1px solid hsl(var(--accent) / 0.32);
-  border-radius: 50%;
-  box-shadow: 0 0 10px hsl(var(--accent) / 0.14);
-  transform: rotateX(67deg) rotateZ(-20deg) translateZ(24px);
-  animation: globe-orbit 8s linear infinite;
+  fill: none;
+  stroke: var(--globe-blue);
+  stroke-width: .48;
+  stroke-dasharray: 8 5 1 5;
+  opacity: .46;
+  transform-origin: 50px 50px;
+  animation: globe-orbit 13s linear infinite;
 }
-.globe-3d-orbit-b {
-  width: 122cqmin;
-  height: 44cqmin;
-  animation-delay: -4s;
-  animation-direction: reverse;
-  opacity: 0.6;
-}
-@keyframes globe-turn {
-  from { transform: scale(0.985); }
-  to { transform: scale(1); }
-}
-@keyframes globe-orbit {
-  from { transform: rotateX(67deg) rotateZ(-20deg) translateZ(24px); }
-  to { transform: rotateX(67deg) rotateZ(340deg) translateZ(24px); }
-}
-@keyframes globe-grid-drift {
-  from { filter: brightness(0.9); }
-  to { filter: brightness(1.16); }
-}
-@keyframes globe-network-drift {
-  from { translate: -2% 1%; }
-  to { translate: 2% -1%; }
-}
-@keyframes globe-node-pulse {
-  0%, 100% { opacity: 0.42; }
-  50% { opacity: 1; }
-}
-@keyframes globe-aura {
-  from { opacity: 0.58; transform: translateZ(-40px) scale(1); }
-  to { opacity: 0.9; transform: translateZ(-40px) scale(1.12); }
-}
-@keyframes globe-land-drift {
-  from { opacity: 0.64; transform: rotate(-5deg) translate(-1%, 1%) translateZ(5px); }
-  to { opacity: 0.9; transform: rotate(-2deg) translate(1%, -1%) translateZ(5px); }
-}
+.globe-3d-orbit-back { opacity: .22; transform: rotate(-18deg); }
+.globe-3d-orbit-front { stroke: var(--globe-mint); opacity: .44; animation-direction: reverse; }
+.globe-3d-card .globe-3d-art { filter: drop-shadow(0 0 10px rgb(42 205 142 / .09)); }
+.globe-3d-card .globe-3d-world { opacity: .4; }
+.globe-3d-card .globe-3d-network-front { opacity: .64; }
+@keyframes globe-orbit { to { transform: rotate(360deg); } }
+@keyframes globe-network-drift { from { translate: -1px 1px; } to { translate: 1px -1px; } }
+@keyframes globe-node-pulse { 0%, 100% { opacity: .42; } 50% { opacity: 1; } }
+@keyframes globe-aura { from { opacity: .16; transform: scale(.98); } to { opacity: .32; transform: scale(1.025); } }
 @media (prefers-reduced-motion: reduce) {
-  .globe-3d-sphere,
   .globe-3d-orbit,
   .globe-3d-grid,
   .globe-3d-network,
   .globe-3d-node,
-  .globe-3d-aura,
-  .globe-3d-landmasses {
+  .globe-3d-aura {
     animation: none;
   }
 }

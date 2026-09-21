@@ -101,7 +101,10 @@ export function OpeningSplash() {
   // The loading surface previews the current dashboard visual rather than the
   // retired wordmark-only ring. Keep it intentionally larger than the empty
   // state globe so a refresh has a clear, full-screen transition.
-  const size = "min(52rem, 94vw)";
+  // Square container plus the globe SVG's square viewBox preserves the circle
+  // at every viewport size; it is intentionally much larger than the Projects
+  // empty-state version so Refresh reads as a branded hero.
+  const size = "min(64rem, 112vw)";
   return (
     // NOTE: `position:fixed` is a TRAP here — MarketingShell's page wrapper is
     // CSS-transformed (`-translate-x-1/2`), which turns any fixed descendant
@@ -144,14 +147,14 @@ export function OpeningSplash() {
             zIndex: 0,
             left: "50%",
             top: "50%",
-            width: "100%",
-            transform: "translate(-50%, -56%)",
+            width: "154%",
+            transform: "translate(-50%, -55%)",
             color: "#86efac",
             // Deliberately exceeds the sphere's silhouette at desktop widths:
             // the mark is a background hero layer, not a caption.
-            fontSize: "clamp(4.5rem, 17vw, 14rem)",
+            fontSize: "clamp(5.25rem, 20vw, 18rem)",
             fontWeight: 650,
-            letterSpacing: "0.1em",
+            letterSpacing: "0.16em",
             lineHeight: 0.8,
             opacity: 0.18,
             textAlign: "center",
@@ -162,7 +165,7 @@ export function OpeningSplash() {
         >
           Autheo
         </span>
-        <AnimatedGlobe className="relative z-10 h-full w-full" />
+        <AnimatedGlobe variant="hero" className="relative z-10 h-full w-full" />
         <span
           style={{
             position: "absolute",
