@@ -211,7 +211,16 @@ pub(crate) async fn run(
     let target = database
         .connection
         .get("net_host")
-        .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+        .and_then(|value| {
+            value.parse::<std::net::Ipv4Addr>().ok().filter(|address| {
+                address.to_string() == *value
+                    && !address.is_unspecified()
+                    && !address.is_loopback()
+                    && !address.is_link_local()
+                    && !address.is_multicast()
+                    && *address != std::net::Ipv4Addr::BROADCAST
+            })
+        })
         .ok_or("marketplace_migration_network_unavailable")?;
     let database_url = database
         .connection
