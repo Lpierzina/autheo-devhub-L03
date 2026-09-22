@@ -25,7 +25,7 @@ pub mod snapshot;
 
 use async_trait::async_trait;
 use hive_core::{BuildJob, BuildResult, CellId, LogLine, ResourceSpec};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -902,6 +902,81 @@ pub(crate) fn container_runtime() -> Option<String> {
     }
 }
 
+/// Resolve the sole platform-owned bind mounts permitted in an application
+/// container. `net_json` can select only a constrained credential id; it can
+/// never name a host path, mount target, device, or socket.
+fn marketplace_secret_file_mounts(
+    net: &serde_json::Value,
+) -> anyhow::Result<Option<Vec<(PathBuf, &'static str)>>> {
+    if net
+        .get("marketplace_workload_mtls")
+        .and_then(|v| v.as_bool())
+        != Some(true)
+    {
+        return Ok(None);
+    }
+    let id = net
+        .get("marketplace_credential_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("MARKETPLACE_MTLS_CREDENTIAL_INVALID"))?;
+    if !(16..=128).contains(&id.len())
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        anyhow::bail!("MARKETPLACE_MTLS_CREDENTIAL_INVALID");
+    }
+    let root = std::env::var_os("HIVE_MARKETPLACE_WORKLOAD_CERT_ROOT")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE"))?;
+    let root_meta = std::fs::symlink_metadata(&root)
+        .map_err(|_| anyhow::anyhow!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !root_meta.is_dir()
+            || root_meta.file_type().is_symlink()
+            || root_meta.uid() != 0
+            || root_meta.mode() & 0o022 != 0
+        {
+            anyhow::bail!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE");
+        }
+    }
+    let directory = root.join(id);
+    let directory_meta = std::fs::symlink_metadata(&directory)
+        .map_err(|_| anyhow::anyhow!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !directory_meta.is_dir()
+            || directory_meta.file_type().is_symlink()
+            || directory_meta.uid() != 0
+            || directory_meta.mode() & 0o022 != 0
+        {
+            anyhow::bail!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE");
+        }
+    }
+    for (name, mode) in [("ca.crt", 0o444), ("tls.crt", 0o444), ("tls.key", 0o400)] {
+        let path = directory.join(name);
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|_| anyhow::anyhow!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if !metadata.file_type().is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.uid() != 0
+                || metadata.mode() & 0o777 != mode
+            {
+                anyhow::bail!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE");
+            }
+        }
+    }
+    // Mount the directory itself read-only: mounting only its children would
+    // leave a writable parent directory in the workload namespace.
+    Ok(Some(vec![(directory, "/var/run/autheo/workload-client")]))
+}
+
 pub(crate) async fn podman_run_container(
     cell_id: &CellId,
     image: &str,
@@ -960,6 +1035,10 @@ pub(crate) async fn podman_run_container(
     );
 
     let net = net_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+    let marketplace_secret_mounts = net
+        .as_ref()
+        .and_then(|value| marketplace_secret_file_mounts(value).transpose())
+        .transpose()?;
     // A real multi-service (compose) deploy pins a static IP + sibling
     // `/etc/hosts` entries — podman-only (see `container_cli::needs_podman_networking`'s
     // doc for why: Apple's `container` tool has no static-IP flag, no
@@ -1099,6 +1178,17 @@ pub(crate) async fn podman_run_container(
     for (k, v) in env {
         base.push("-e".into());
         base.push(format!("{k}={v}"));
+    }
+    // This is intentionally not a generic bind-mount surface. The deployment
+    // config can only select a platform-issued credential id; the host paths,
+    // destinations, options, and modes are all fixed here.
+    for (source, destination) in marketplace_secret_mounts.unwrap_or_default() {
+        base.push("--mount".into());
+        base.push(format!(
+            "type=bind,src={},dst={},ro=true,nosuid,nodev,noexec",
+            source.display(),
+            destination
+        ));
     }
     // Mount the automatic persistent volume + tell the app where it is ($HIVE_VOLUME).
     if let Some((vname, vpath)) = &volume {

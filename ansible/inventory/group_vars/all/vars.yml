@@ -36,6 +36,10 @@ hive_marketplace_gateway_listen: ""
 hive_marketplace_gateway_tls_cert: ""
 hive_marketplace_gateway_tls_key: ""
 hive_marketplace_gateway_ca_cert: ""
+# Root-owned only. CA/server material and per-workload client credentials are
+# supplied from vault; no private key is placed in generated environment files.
+hive_marketplace_gateway_client_ca: ""
+hive_marketplace_workload_cert_root: "/var/lib/hive/marketplace-workload-certs"
 # HIVE_BOOTSTRAP_PEERS: one existing node's 64-hex iroh NodeId is enough for
 # a NEW node to join (see roles/mesh_bootstrap and playbooks/node-join.yml).
 # For a from-scratch fleet, leave the first node's bootstrap_peers empty.
