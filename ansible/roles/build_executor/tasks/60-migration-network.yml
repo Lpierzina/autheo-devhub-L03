@@ -13,7 +13,7 @@
       - "{{ build_executor_migration_network_subnet }}"
   changed_when: false
 
-- name: Install Marketplace migration verifier
+- name: Install Marketplace migration setup and cleanup verifier
   ansible.builtin.template:
     src: verify-marketplace-migration.sh.j2
     dest: "{{ item }}"

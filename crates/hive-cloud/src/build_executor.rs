@@ -1315,7 +1315,7 @@ impl BuildExecutor {
     }
 
     pub async fn begin(&self, request: BuildRequest) -> Result<BuildSession> {
-        self.begin_with_network(request, None, false).await
+        self.begin_with_network(request, None, false, None).await
     }
 
     /// Begin the only BuildExecutor surface permitted to contact a managed
@@ -1384,7 +1384,13 @@ impl BuildExecutor {
                 "migration target policy is not active",
             ));
         }
-        self.begin_with_network(request, Some(migration.policy.clone()), true)
+        // Install the migration-specific cleanup contract before entering the
+        // normal session startup path.  From this point any error or Drop,
+        // including one before a container was created, clears the exact
+        // target through the root-owned verifier.
+        let mut cleanup = CleanupGuard::new(self);
+        cleanup.set_migration_policy(migration.clone());
+        self.begin_with_network(request, Some(migration.policy.clone()), true, Some(cleanup))
             .await
     }
 
@@ -1393,6 +1399,7 @@ impl BuildExecutor {
         request: BuildRequest,
         network_policy: Option<BuildNetworkPolicy>,
         migration: bool,
+        cleanup: Option<CleanupGuard>,
     ) -> Result<BuildSession> {
         let surface = request.surface;
         let deadline = Instant::now() + self.inner.config.limits.max_total_time;
@@ -1451,7 +1458,13 @@ impl BuildExecutor {
         let id = Uuid::new_v4().simple().to_string();
         let workspace_volume = format!("hive-build-ws-{id}");
         let container = format!("hive-build-{id}");
-        let mut cleanup = CleanupGuard::new(self);
+        let mut cleanup = cleanup.unwrap_or_else(|| CleanupGuard::new(self));
+        if migration {
+            // CleanupGuard owns a clone so its synchronous Drop fallback keeps
+            // the trusted lifecycle lock held until verifier cleanup finishes,
+            // even though BuildSession drops its own field first.
+            cleanup.set_lifecycle_lock(lifecycle_lock.clone());
+        }
         self.create_volume(&workspace_volume, self.inner.config.limits.workspace_bytes)
             .await?;
         cleanup.add_volume(workspace_volume.clone());
@@ -2418,6 +2431,14 @@ impl BuildExecutor {
 impl BuildSession {
     pub fn policy_digest(&self) -> &str {
         &self.executor.inner.capability.policy_digest
+    }
+
+    /// Finish a session only after its full cleanup contract has completed.
+    /// Marketplace migrations use this before reporting readiness so a failed
+    /// target-set clear cannot be mistaken for a clean completion. Dropping a
+    /// session remains the cancellation-safe fallback.
+    pub async fn destroy(mut self) -> Result<()> {
+        self.cleanup.cleanup(&self.executor).await
     }
 
     pub async fn run<F>(&mut self, step: BuildStep, mut log: F) -> Result<BuildStepResult>
@@ -3433,11 +3454,16 @@ async fn atomic_exchange_directories(staging: &Path, destination: &Path) -> Resu
 struct CleanupState {
     containers: Vec<String>,
     volumes: Vec<String>,
+    /// Only migration sessions populate this.  It is deliberately retained
+    /// until the root-owned verifier proves both the nft target set and the
+    /// migration network have no surviving session state.
+    migration_policy: Option<MigrationNetworkPolicy>,
 }
 
 struct CleanupGuard {
     podman: PathBuf,
     env: BTreeMap<String, String>,
+    lifecycle_lock: Option<Arc<std::fs::File>>,
     state: Option<CleanupState>,
 }
 
@@ -3446,6 +3472,7 @@ impl CleanupGuard {
         Self {
             podman: executor.inner.config.podman_path.clone(),
             env: executor.inner.config.podman_env.clone(),
+            lifecycle_lock: None,
             state: Some(CleanupState::default()),
         }
     }
@@ -3460,6 +3487,16 @@ impl CleanupGuard {
         if let Some(state) = self.state.as_mut() {
             state.volumes.push(name);
         }
+    }
+
+    fn set_migration_policy(&mut self, policy: MigrationNetworkPolicy) {
+        if let Some(state) = self.state.as_mut() {
+            state.migration_policy = Some(policy);
+        }
+    }
+
+    fn set_lifecycle_lock(&mut self, lock: Option<Arc<std::fs::File>>) {
+        self.lifecycle_lock = lock;
     }
 
     async fn remove_container(&mut self, executor: &BuildExecutor, name: &str) -> Result<()> {
@@ -3511,6 +3548,13 @@ impl CleanupGuard {
                 ));
             }
         }
+        if let Some(policy) = state.migration_policy.take() {
+            if let Err(error) = clear_migration_target_async(&policy).await {
+                state.migration_policy = Some(policy);
+                self.state = Some(state);
+                return Err(error);
+            }
+        }
         Ok(())
     }
 }
@@ -3520,14 +3564,21 @@ impl Drop for CleanupGuard {
         let Some(state) = self.state.take() else {
             return;
         };
-        if state.containers.is_empty() && state.volumes.is_empty() {
+        if state.containers.is_empty()
+            && state.volumes.is_empty()
+            && state.migration_policy.is_none()
+        {
             return;
         }
         let podman = self.podman.clone();
         let env = self.env.clone();
+        let lifecycle_lock = self.lifecycle_lock.take();
         let _ = std::thread::Builder::new()
             .name("hive-build-cleanup".to_string())
-            .spawn(move || cleanup_sync(&podman, &env, state));
+            .spawn(move || {
+                let _lifecycle_lock = lifecycle_lock;
+                cleanup_sync(&podman, &env, state);
+            });
     }
 }
 
@@ -3579,6 +3630,95 @@ fn cleanup_sync(podman: &Path, env: &BTreeMap<String, String>, mut state: Cleanu
                 .into_iter()
                 .map(OsString::from),
         );
+    }
+    if let Some(policy) = state.migration_policy.take() {
+        run_migration_target_cleanup_sync(&policy);
+    }
+}
+
+/// Clear the exact Marketplace target only after every tracked migration
+/// container and volume has gone. The verifier owns the trusted lifecycle lock,
+/// capability/policy validation, nft mutation, empty-set proof, and final
+/// attachment proof; the unprivileged caller supplies no cleanup scope.
+async fn clear_migration_target_async(policy: &MigrationNetworkPolicy) -> Result<()> {
+    validate_trusted_executable(
+        &policy.target_verify_path,
+        "Marketplace migration cleanup verifier",
+    )?;
+    if sha256_file(&policy.target_verify_path).await? != policy.target_verify_sha256 {
+        return Err(BuildExecutorError::new(
+            BuildExecutorErrorCode::CapabilityMismatch,
+            "clear Marketplace migration target",
+            "migration cleanup verifier differs from the declared capability",
+        ));
+    }
+    let mut command = Command::new(&policy.target_verify_path);
+    command
+        .arg("--clear-migration-target")
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let status = tokio::time::timeout(CLEANUP_TIMEOUT, command.status())
+        .await
+        .map_err(|_| {
+            BuildExecutorError::new(
+                BuildExecutorErrorCode::CleanupFailed,
+                "clear Marketplace migration target",
+                "migration cleanup verifier timed out",
+            )
+        })?
+        .map_err(|_| {
+            BuildExecutorError::new(
+                BuildExecutorErrorCode::CleanupFailed,
+                "clear Marketplace migration target",
+                "could not run migration cleanup verifier",
+            )
+        })?;
+    if !status.success() {
+        return Err(BuildExecutorError::new(
+            BuildExecutorErrorCode::CleanupFailed,
+            "clear Marketplace migration target",
+            "migration cleanup verification failed",
+        ));
+    }
+    Ok(())
+}
+
+fn run_migration_target_cleanup_sync(policy: &MigrationNetworkPolicy) {
+    let child = std::process::Command::new(&policy.target_verify_path)
+        .arg("--clear-migration-target")
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        eprintln!("Marketplace migration cleanup verifier could not start");
+        return;
+    };
+    let deadline = std::time::Instant::now() + CLEANUP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    eprintln!("Marketplace migration cleanup verifier failed");
+                }
+                return;
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                eprintln!("Marketplace migration cleanup verifier timed out");
+                return;
+            }
+        }
     }
 }
 

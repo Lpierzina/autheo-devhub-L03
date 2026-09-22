@@ -2,16 +2,30 @@
 # {{ ansible_managed }}
 set -euo pipefail
 umask 077
-[[ $# -eq 2 && $1 == --migration-target ]] || exit 64
-target=${2%:5432}
-[[ $2 == "${target}:5432" ]] || exit 1
+case "$#" in
+  1)
+    [[ $1 == --clear-migration-target ]] || exit 64
+    operation=clear
+    target=
+    ;;
+  2)
+    [[ $1 == --migration-target ]] || exit 64
+    operation=set
+    target=${2%:5432}
+    [[ $2 == "${target}:5432" ]] || exit 1
+    ;;
+  *) exit 64 ;;
+esac
 exec 9>>{{ build_executor_migration_lock_path | quote }}
 /usr/bin/flock --shared 9
-/usr/bin/python3 - "$target" <<'PY'
+/usr/bin/python3 - "$operation" "$target" <<'PY'
 import hashlib, ipaddress, json, pathlib, stat, subprocess, sys
-target = sys.argv[1]
-ip = ipaddress.IPv4Address(target)
-if str(ip) != target or ip.is_unspecified or ip.is_loopback or ip.is_link_local or ip.is_multicast or target == "255.255.255.255": raise SystemExit(1)
+operation, target = sys.argv[1:]
+if operation not in ("set", "clear"): raise SystemExit(1)
+if operation == "set":
+ ip = ipaddress.IPv4Address(target)
+ if str(ip) != target or ip.is_unspecified or ip.is_loopback or ip.is_link_local or ip.is_multicast or target == "255.255.255.255": raise SystemExit(1)
+elif target: raise SystemExit(1)
 def trusted(path, mode):
  p=pathlib.Path(path); s=p.lstat()
  if not stat.S_ISREG(s.st_mode) or s.st_uid or s.st_gid or stat.S_IMODE(s.st_mode)!=mode: raise SystemExit(1)
@@ -30,14 +44,39 @@ if m.get("network_policy_digest")!="sha256:"+hashlib.sha256(policy.read_bytes())
 net=json.loads(subprocess.check_output([str(wrapper),"network","inspect",m["network_name"]],text=True))[0]
 subnets=net.get("subnets") or []
 if not (net.get("driver")=="bridge" and net.get("network_interface")==m["network_bridge"] and net.get("ipv6_enabled") is False and net.get("dns_enabled") is False and net.get("internal") is False and (net.get("labels")or{}).get("io.hive.build-executor.policy-id")==m["network_policy_id"] and len(subnets)==1 and subnets[0].get("subnet")==m["network_subnet"] and subnets[0].get("gateway")==m["network_gateway"]): raise SystemExit(1)
-nft={{ build_executor_nft_binary | to_json }}
-subprocess.run([nft, "flush", "set", "inet", m["nft_table"], "migration_target_ipv4"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-subprocess.run([nft, "add", "element", "inet", m["nft_table"], "migration_target_ipv4", "{", target, "}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def no_attachments():
+ containers=net.get("containers")
+ return isinstance(containers,dict) and not containers
+nft=str(trusted({{ build_executor_nft_binary | to_json }},0o755))
 def table(family,name): return json.loads(subprocess.check_output([nft,"-j","list","table",family,name],text=True))["nftables"]
+def target_elements():
+ rows=json.loads(subprocess.check_output([nft,"-j","list","set","inet",m["nft_table"],"migration_target_ipv4"],text=True))["nftables"]
+ sets=[r["set"] for r in rows if "set" in r and r["set"].get("name")=="migration_target_ipv4"]
+ if len(sets)!=1 or sets[0].get("family")!="inet" or sets[0].get("table")!=m["nft_table"] or sets[0].get("type")!="ipv4_addr" or sets[0].get("flags",[]) not in ([],None): raise SystemExit(1)
+ values=[]
+ for item in sets[0].get("elem",[]):
+  value=item.get("elem",{}).get("val") if isinstance(item,dict) else None
+  if not isinstance(value,str): raise SystemExit(1)
+  values.append(value)
+ return values
 for family,name in (("inet",m["nft_table"]),("bridge",m["nft_bridge_table"])):
  rows=table(family,name)
- if sum("table" in r for r in rows)!=1 or any(r.get("rule",{}).get("comment") in ("migration-target-5432","migration-return") and target not in json.dumps(r) for r in rows): raise SystemExit(1)
+ tables=[r["table"] for r in rows if "table" in r]
+ if len(tables)!=1 or tables[0].get("family")!=family or tables[0].get("name")!=name or tables[0].get("comment")!=m["network_policy_id"]: raise SystemExit(1)
 comments=[r["rule"].get("comment") for r in table("inet",m["nft_table"]) if "rule" in r]
 required=["migration-input-drop","migration-ipv6-drop","migration-return-ipv6-drop","migration-dnat-drop","migration-target-5432","migration-egress-drop","migration-return","migration-ingress-drop"]
 if comments!=required: raise SystemExit(1)
+target_elements()
+if operation == "set":
+ subprocess.run([nft, "flush", "set", "inet", m["nft_table"], "migration_target_ipv4"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+ subprocess.run([nft, "add", "element", "inet", m["nft_table"], "migration_target_ipv4", "{", target, "}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+ if target_elements()!=[target]: raise SystemExit(1)
+else:
+ # Never withdraw the target while any migration container remains attached.
+ if not no_attachments(): raise SystemExit(1)
+ subprocess.run([nft, "flush", "set", "inet", m["nft_table"], "migration_target_ipv4"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+ if target_elements(): raise SystemExit(1)
+ # Re-inspect after mutation; a surviving or racing attachment is fail-closed.
+ net=json.loads(subprocess.check_output([str(wrapper),"network","inspect",m["network_name"]],text=True))[0]
+ if not no_attachments(): raise SystemExit(1)
 PY
