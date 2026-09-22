@@ -160,10 +160,7 @@ async fn gateway_request(State(cloud): State<Arc<CloudState>>, req: Request<Body
                 .nodes()
                 .into_iter()
                 .find(|node| node.id == target.as_str() || node.name == target.as_str());
-            let Some(peer) = peer.and_then(|node| Some((node.peer_id?, node.iroh_addr?))) else {
-                None
-            };
-            match peer {
+            match peer.and_then(|node| Some((node.peer_id?, node.iroh_addr?))) {
                 Some((peer_id, addr)) => crate::gossip::request_to_with_response_cap(
                     &cloud,
                     &peer_id,
