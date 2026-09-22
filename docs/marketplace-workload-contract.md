@@ -31,6 +31,20 @@ Project identity is not a capability. In particular, a rollback to a release
 without this declaration cannot inherit `files-v1` from a later release and
 must fail the credential/readiness path.
 
+When the capability is available, the allocation-scoped, platform-owned
+runtime credential mount contains only:
+
+| path | mode |
+| --- | --- |
+| `/var/run/autheo/workload-client/ca.crt` | `0444` |
+| `/var/run/autheo/workload-client/tls.crt` | `0444` |
+| `/var/run/autheo/workload-client/tls.key` | `0400` |
+
+The containing directory is not writable by the workload. Certificates,
+private keys, database URLs, and source configuration never belong in
+deployment records, build environments, build logs, Marketplace API responses,
+or ordinary environment variables.
+
 The private gateway is mTLS transport only. The final receiving DevHub
 Marketplace router still verifies the request's HMAC, timestamp, body digest,
 durable nonce, and idempotency semantics. Iroh trust authorizes the internal
