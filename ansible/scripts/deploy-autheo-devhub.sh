@@ -14,6 +14,11 @@ DEFAULT_VAULT_PASSWORD_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autheo/ansible/va
 inventory="${AUTHEO_DEVHUB_INVENTORY:-$ANSIBLE_DIR/inventory/hosts.ini}"
 repo="${AUTHEO_DEVHUB_REPO:-https://github.com/ThothDivision/L0_devhub_deploy.git}"
 version="${AUTHEO_DEVHUB_VERSION:-main}"
+source_dir="${AUTHEO_DEVHUB_SOURCE_DIR:-$REPO_DIR}"
+repo_explicit=0
+source_dir_explicit=0
+[[ -n "${AUTHEO_DEVHUB_REPO:-}" ]] && repo_explicit=1
+[[ -n "${AUTHEO_DEVHUB_SOURCE_DIR:-}" ]] && source_dir_explicit=1
 limit="${AUTHEO_DEVHUB_LIMIT:-}"
 vault_password_file="${AUTHEO_DEVHUB_VAULT_PASSWORD_FILE:-$DEFAULT_VAULT_PASSWORD_FILE}"
 vault_password_file_explicit=0
@@ -29,8 +34,9 @@ This does not deploy hive-node or hive-ui (:3002).
 
 Options:
   --inventory PATH             Inventory file (default: ansible/inventory/hosts.ini)
-  --repo URL                   Dev Hub source repository
+  --repo URL                   Dev Hub source repository (or pair with --source-dir)
   --version REF                Dev Hub source revision (default: main)
+  --source-dir PATH            Local Dev Hub checkout to package (default: this checkout)
   --limit PATTERN              Limit Ansible to the elected Dev Hub host
   --vault-password-file PATH   Use an existing vault password file
   --update                     Clean-fast-forward this checkout before deployment
@@ -39,6 +45,7 @@ Options:
 
 Environment equivalents:
   AUTHEO_DEVHUB_INVENTORY, AUTHEO_DEVHUB_REPO, AUTHEO_DEVHUB_VERSION,
+  AUTHEO_DEVHUB_SOURCE_DIR,
   AUTHEO_DEVHUB_LIMIT, AUTHEO_DEVHUB_VAULT_PASSWORD_FILE,
   AUTHEO_DEVHUB_UPDATE=1, AUTHEO_DEVHUB_ASSUME_YES=1.
 
@@ -67,11 +74,18 @@ while (($#)); do
     --repo)
       (($# >= 2)) || die "--repo requires a URL"
       repo="$2"
+      repo_explicit=1
       shift 2
       ;;
     --version)
       (($# >= 2)) || die "--version requires a ref"
       version="$2"
+      shift 2
+      ;;
+    --source-dir)
+      (($# >= 2)) || die "--source-dir requires a path"
+      source_dir="$2"
+      source_dir_explicit=1
       shift 2
       ;;
     --limit)
@@ -103,6 +117,12 @@ while (($#)); do
   esac
 done
 
+if [[ "$repo_explicit" == "1" && "$source_dir_explicit" != "1" ]]; then
+  # An explicitly selected repository must retain the direct-role behavior
+  # unless its corresponding local checkout was explicitly selected too.
+  source_dir=""
+fi
+
 [[ -f "$ROLE_TASKS" ]] || die "required role tasks are missing: $ROLE_TASKS"
 [[ -f "$PLAYBOOK" ]] || die "required playbook is missing: $PLAYBOOK"
 [[ -f "$inventory" ]] || die "inventory does not exist: $inventory"
@@ -113,6 +133,16 @@ done
   die "vault password source is missing: $vault_password_file. Restore the exact pre-existing password from approved secret storage; do not create a replacement."
 [[ -r "$vault_password_file" ]] ||
   die "vault password source is not readable: $vault_password_file. Correct access without changing its contents."
+if [[ -n "$source_dir" ]]; then
+  [[ -d "$source_dir" ]] ||
+    die "Dev Hub source directory does not exist: $source_dir"
+  git -C "$source_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    die "Dev Hub source directory is not a Git worktree: $source_dir"
+fi
+
+vault_error="$(mktemp)"
+source_archive=""
+trap 'rm -f "$vault_error" "${deploy_log:-}" "${source_archive:-}"' EXIT
 
 vault_cmd=(ansible-vault view)
 if [[ "$vault_password_file_explicit" == "1" || -n "${AUTHEO_DEVHUB_VAULT_PASSWORD_FILE:-}" ]]; then
@@ -120,8 +150,6 @@ if [[ "$vault_password_file_explicit" == "1" || -n "${AUTHEO_DEVHUB_VAULT_PASSWO
 fi
 vault_cmd+=("$VAULT_FILE")
 
-vault_error="$(mktemp)"
-trap 'rm -f "$vault_error" "${deploy_log:-}"' EXIT
 if ! (cd "$ANSIBLE_DIR" &&
   ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" "${vault_cmd[@]}" >/dev/null 2>"$vault_error"); then
   if grep -Eq 'password file.*(not found|does not exist)' "$vault_error"; then
@@ -153,6 +181,15 @@ if [[ "$update" == "1" ]]; then
   fi
 fi
 
+if [[ -n "$source_dir" ]]; then
+  source_revision="$(git -C "$source_dir" rev-parse "${version}^{commit}" 2>/dev/null)" ||
+    die "Dev Hub source directory does not contain the requested revision: $version"
+  source_archive="$(mktemp --suffix=.tar.gz)"
+  git -C "$source_dir" archive --format=tar.gz --output="$source_archive" "$source_revision"
+else
+  source_revision=""
+fi
+
 if [[ "$assume_yes" != "1" ]]; then
   printf 'Deploy only autheo-devhub (:3001) from %s at %s? [y/N] ' "$repo" "$version"
   read -r reply
@@ -167,6 +204,8 @@ playbook_cmd=(
   -e "autheo_devhub_enabled=true"
   -e "autheo_devhub_repo=$repo"
   -e "autheo_devhub_version=$version"
+  -e "autheo_devhub_source_archive=$source_archive"
+  -e "autheo_devhub_source_revision=$source_revision"
 )
 if [[ -n "$limit" ]]; then
   playbook_cmd+=(--limit "$limit")

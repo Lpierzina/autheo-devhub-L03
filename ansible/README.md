@@ -152,7 +152,10 @@ deployed fleet dashboard on `127.0.0.1:3002`.
 
 The Dev Hub deploy is opt-in and runs on the existing `ui_builder` host (the
 control-plane owner elected by `parallel-deploy.yml`), never by a hard-coded
-host name. It clones the requested source/ref into staging, uses the
+host name. The wrapper archives the requested revision from its local checkout
+and transfers it to the elected host, so the host does not need GitHub access.
+The role can still clone the requested source/ref when invoked directly without
+an archive. It uses the
 application's `ui/package-lock.json` via `npm ci`, runs the production build,
 validates `.next/BUILD_ID` and the Next runtime, then atomically replaces
 `/opt/autheo-devhub`. `/etc/autheo-devhub.env` is never copied into the
@@ -176,10 +179,12 @@ ansible-playbook -i inventory/hosts.ini playbooks/parallel-deploy.yml \
   --tags autheo_devhub \
   -e autheo_devhub_enabled=true \
   -e autheo_devhub_repo=https://github.com/ThothDivision/L0_devhub_deploy.git \
-  -e autheo_devhub_version=main
+  -e autheo_devhub_version=main \
+  -e autheo_devhub_source_archive=/tmp/autheo-devhub-source.tar.gz \
+  -e autheo_devhub_source_revision=<immutable-git-revision>
 ```
 
-Use `--inventory`, `--repo`, `--version`, `--limit`, or
+Use `--inventory`, `--repo`, `--version`, `--source-dir`, `--limit`, or
 `--vault-password-file` for explicit safe overrides. `--update` is opt-in
 and performs only a clean fast-forward update of this checkout; it refuses
 any unclean or diverged working tree rather than merging, rebasing, or
