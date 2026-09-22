@@ -126,12 +126,9 @@ done
 git -C "$source_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
   die "Dev Hub source directory is not a Git worktree: $source_dir"
 
-source_revision="$(git -C "$source_dir" rev-parse "${version}^{commit}" 2>/dev/null)" ||
-  die "Dev Hub source directory does not contain the requested revision: $version"
-source_archive="$(mktemp --suffix=.tar.gz)"
 vault_error="$(mktemp)"
-trap 'rm -f "$vault_error" "${deploy_log:-}" "$source_archive"' EXIT
-git -C "$source_dir" archive --format=tar.gz --output="$source_archive" "$source_revision"
+source_archive=""
+trap 'rm -f "$vault_error" "${deploy_log:-}" "${source_archive:-}"' EXIT
 
 vault_cmd=(ansible-vault view)
 if [[ "$vault_password_file_explicit" == "1" || -n "${AUTHEO_DEVHUB_VAULT_PASSWORD_FILE:-}" ]]; then
@@ -169,6 +166,11 @@ if [[ "$update" == "1" ]]; then
     die "--update refuses a diverged worktree; it will not merge, rebase, or reset history"
   fi
 fi
+
+source_revision="$(git -C "$source_dir" rev-parse "${version}^{commit}" 2>/dev/null)" ||
+  die "Dev Hub source directory does not contain the requested revision: $version"
+source_archive="$(mktemp --suffix=.tar.gz)"
+git -C "$source_dir" archive --format=tar.gz --output="$source_archive" "$source_revision"
 
 if [[ "$assume_yes" != "1" ]]; then
   printf 'Deploy only autheo-devhub (:3001) from %s at %s? [y/N] ' "$repo" "$version"
