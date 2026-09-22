@@ -264,18 +264,37 @@ Ordinary BuildExecutor jobs remain `--network=none`. Marketplace SQL migration
 is the only separately gated attachment and is enabled only with
 `build_executor_migration_enabled: true` plus one canonical managed Postgres
 IPv4 target, an IPv4-only dedicated bridge/subnet/gateway, and the reviewed
-capability identifiers. The target is infrastructure inventory, not tenant,
-repository, release, environment, or browser input; credentials remain in the
-existing secret-file path and never enter capability JSON or nftables.
+capability identifiers. At runtime the target comes only from the validated
+Ready platform-managed Postgres record, never from tenant, repository, release,
+environment, inventory, or browser input; credentials remain in the existing
+secret-file path and never enter capability JSON or nftables.
 
 Provisioning installs root-owned mode-pinned verifier copies and lifecycle
 lock, adds the labeled DNS-disabled Podman network, loads a separate nftables
 table, then hashes the verifier bytes before publishing the nested capability.
-The verifier accepts only `--migration-target <canonical-ipv4>:5432`; it checks
-all trusted artifacts, capability identity/version, the live network, and live
-nft JSON. The only new flow is bridge-to-exact-target TCP/5432 plus
-established/related return traffic. IPv6, DNS, host/fleet/public/private
-ranges, DNAT, lateral bridge forwarding, other ports, and default egress drop.
+The root-owned verifier accepts only `--migration-target
+<canonical-ipv4>:5432` and the parameterless `--clear-migration-target`
+operation. Both take the same root-only lifecycle lock and re-check trusted
+artifacts, capability identity/version, policy digest, live network, and live
+nft declaration before mutation. Cleanup accepts no table, set, address,
+policy, or tenant-controlled scope: it can flush only the capability-declared
+`migration_target_ipv4` set. It refuses to clear while any container remains
+attached to the migration network, proves the set empty after the flush, then
+re-inspects the network for surviving attachments.
+
+The BuildExecutor lifecycle runs migration cleanup in this order: remove
+migration containers, remove temporary tmpfs volumes, prove no network
+attachment remains, clear the exact target, prove the target set empty, then
+release the lifecycle lock. The same contract runs on normal completion, SQL
+failure, startup failure, timeout, cancellation, explicit destruction, and
+unexpected session/cleanup-guard Drop. A verifier or removal failure is
+fail-closed: the session is not cleanly completed and the operator must retain
+the host for remediation rather than manually broadening policy. Ordinary
+BuildExecutor sessions never install this state and remain `--network=none`.
+
+The only new flow is bridge-to-exact-target TCP/5432 plus established/related
+return traffic. IPv6, DNS, host/fleet/public/private ranges, DNAT, lateral
+bridge forwarding, other ports, and default egress drop.
 
 Any failed precondition removes the published capability rather than enabling a
 fallback. Migration containers and tmpfs volumes retain the existing managed

@@ -127,6 +127,32 @@ variables and rerun the serialized role after changing a managed target; failed
 provisioning revokes the nested capability while leaving ordinary offline builds
 unchanged.
 
+The target authorization is strictly job-scoped. Startup invokes the
+root-owned verifier to insert only the exact target into its reviewed
+`migration_target_ipv4` set. Every terminal path — successful migration,
+SQL/session failure, timeout, request cancellation, dropped future, partial
+startup, explicit destruction, and an unexpected `BuildSession` or
+`CleanupGuard` drop — uses the same cleanup contract: stop/remove migration
+containers, remove temporary migration volumes, prove no migration attachment
+remains, clear the target, prove the set empty, recheck for surviving
+attachments, then release the trusted lifecycle lock. The clear operation is
+parameterless: it validates the trusted capability, verifier bytes, policy
+identity, live network, and reviewed nft declaration before it may affect the
+one declared migration set. It accepts no address, table, set, policy, or
+tenant input.
+
+If any removal, attachment proof, target clear, or empty-set proof fails, the
+session is not reported as cleanly complete. The failure remains typed and
+topology-free to callers; privileged host diagnostics retain the detail needed
+for remediation. Operators must stop admitting Marketplace migrations on that
+host, preserve the failed lifecycle state, inspect the root-owned verifier and
+its declared capability/policy under the lifecycle lock, remove only the
+identified managed migration containers and temporary volumes, run the
+parameterless verifier cleanup operation, and require its empty-set and
+attachment proofs to pass before restoring the capability. Do not manually
+flush unrelated nftables state or broaden BuildExecutor networking. Ordinary
+BuildExecutor jobs remain `--network=none` throughout.
+
 Settlement stays `settlement_unavailable` until the selected
 `autheo-testnet-v1` profile verifies all of:
 
