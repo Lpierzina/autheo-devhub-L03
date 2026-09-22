@@ -33,10 +33,9 @@ Set these node-local, secret-managed values on every Marketplace-capable node:
 HIVE_MARKETPLACE_PROJECT=marketplace
 HIVE_MARKETPLACE_GATEWAY_HOST=devhub-marketplace.internal
 HIVE_MARKETPLACE_GATEWAY_LISTEN=<this project's RFC1918 Podman bridge IP>:9443
-HIVE_MARKETPLACE_GATEWAY_TLS_CERT=/etc/hive/marketplace-gateway.crt
-HIVE_MARKETPLACE_GATEWAY_TLS_KEY=/etc/hive/marketplace-gateway.key
-HIVE_MARKETPLACE_GATEWAY_CA_CERT=/etc/hive/marketplace-gateway-ca.crt
-HIVE_MARKETPLACE_HMAC_KEYS=<key-id>:<secret>[,...]
+HIVE_MARKETPLACE_GATEWAY_TLS_CERT=/etc/hive/marketplace-ca/gateway.crt
+HIVE_MARKETPLACE_GATEWAY_TLS_KEY=/etc/hive/marketplace-ca/gateway.key
+HIVE_MARKETPLACE_GATEWAY_CA_CERT=/etc/hive/marketplace-ca/ca.crt
 ```
 
 The listener refuses wildcard, public, loopback, link-local, unspecified, and
@@ -44,6 +43,13 @@ IPv6 binds. It is separate from port 8786, the public edge, and
 `api.<platform-domain>`. It requires a client certificate chained to the
 configured private CA; TLS is transport identity only and never replaces the
 Marketplace HMAC check on the receiving router.
+
+`HIVE_MARKETPLACE_HMAC_KEYS` is intentionally absent from this public
+configuration list. It is supplied only via Ansible vault into the root-only
+systemd secret environment. The shared CA and gateway key are likewise
+vault-managed server-only files; no private PEM or HMAC value may be emitted
+into inventory defaults, build configuration, deployment state, browser data,
+or logs.
 
 Marketplace workload credentials are runtime secret files, never environment
 values:
