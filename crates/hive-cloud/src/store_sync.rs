@@ -125,6 +125,18 @@ pub static REGISTRY: &[SyncedStore] = &[
         },
     },
     SyncedStore {
+        // Releases are DevHub-owned durable authority; deployment records are
+        // intentionally not used as a release substitute.
+        name: "marketplace_releases",
+        snapshot: |c| serde_json::to_vec(&c.marketplace_releases.snapshot()).unwrap_or_default(),
+        adopt: |c, b| {
+            let snapshot: crate::marketplace_releases::MarketplaceReleaseSnapshot =
+                serde_json::from_slice(b).ok()?;
+            c.marketplace_releases.load(snapshot);
+            Some(1)
+        },
+    },
+    SyncedStore {
         name: "browser_admissions",
         // Unlike durable business stores, an empty active set is authoritative:
         // tombstones + the monotonic version prove it is a revocation, not a

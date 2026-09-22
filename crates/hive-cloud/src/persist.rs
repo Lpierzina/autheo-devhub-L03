@@ -21,7 +21,7 @@ use std::sync::Arc;
 use fluid_core::DeployRecord;
 use hive_edge::{CronJob, Redirect, Rewrite, WafRule, WorkflowDef, WorkflowRun};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::project_settings::{ProjectSettings, SyncedProjects};
 use crate::state::CloudState;
@@ -112,6 +112,8 @@ pub struct PlatformSnapshot {
     pub marketplace_allocations: Vec<crate::marketplace::Allocation>,
     #[serde(default)]
     pub marketplace_security: crate::marketplace::MarketplaceSecuritySnapshot,
+    #[serde(default)]
+    pub marketplace_releases: crate::marketplace_releases::MarketplaceReleaseSnapshot,
     #[serde(default)]
     pub incidents: Vec<crate::incidents::Incident>,
     /// Web-push subscriptions / SMS targets / delivery watermarks / VAPID keys.
@@ -583,6 +585,7 @@ pub fn capture(cloud: &Arc<CloudState>) -> PlatformSnapshot {
         builds: cloud.builds.snapshot(),
         marketplace_allocations: cloud.marketplace_allocations.snapshot(),
         marketplace_security: cloud.marketplace_security.snapshot(),
+        marketplace_releases: cloud.marketplace_releases.snapshot(),
         incidents: cloud.incidents.snapshot(),
         push: cloud.push.snapshot(),
         apikeys: cloud.apikeys.snapshot(),
@@ -667,34 +670,36 @@ pub fn spawn_persister(cloud: Arc<CloudState>) {
     // the async runtime's worker threads.
     std::thread::Builder::new()
         .name("hive-persister".into())
-        .spawn(move || loop {
-            {
-                let mut g = p.lock.lock().unwrap();
-                while p.dirty.load(Ordering::SeqCst) <= p.saved.load(Ordering::SeqCst) {
-                    g = p.cv.wait(g).unwrap();
+        .spawn(move || {
+            loop {
+                {
+                    let mut g = p.lock.lock().unwrap();
+                    while p.dirty.load(Ordering::SeqCst) <= p.saved.load(Ordering::SeqCst) {
+                        g = p.cv.wait(g).unwrap();
+                    }
                 }
-            }
-            // Drain: coalesce everything up to the newest generation seen after
-            // acquiring the exclusive snapshot-writer slot. A shutdown flush may
-            // have satisfied this wake while we waited, in which case there is
-            // nothing left to write.
-            let write_result = {
-                let _writer = p.writer.lock().unwrap();
-                let target = p.dirty.load(Ordering::SeqCst);
-                if target <= p.saved.load(Ordering::SeqCst) {
-                    continue;
+                // Drain: coalesce everything up to the newest generation seen after
+                // acquiring the exclusive snapshot-writer slot. A shutdown flush may
+                // have satisfied this wake while we waited, in which case there is
+                // nothing left to write.
+                let write_result = {
+                    let _writer = p.writer.lock().unwrap();
+                    let target = p.dirty.load(Ordering::SeqCst);
+                    if target <= p.saved.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    let snap = capture(&p.cloud);
+                    let result = save(&snap);
+                    if result.is_ok() {
+                        p.saved.store(target, Ordering::SeqCst);
+                    }
+                    result
+                };
+                if let Err(e) = write_result {
+                    tracing::warn!(error = %e, "persist(bg) failed; will retry on next mutation");
+                    // Don't advance `saved` → the next persist() re-triggers a write.
+                    std::thread::sleep(std::time::Duration::from_millis(250));
                 }
-                let snap = capture(&p.cloud);
-                let result = save(&snap);
-                if result.is_ok() {
-                    p.saved.store(target, Ordering::SeqCst);
-                }
-                result
-            };
-            if let Err(e) = write_result {
-                tracing::warn!(error = %e, "persist(bg) failed; will retry on next mutation");
-                // Don't advance `saved` → the next persist() re-triggers a write.
-                std::thread::sleep(std::time::Duration::from_millis(250));
             }
         })
         .expect("spawn persister thread");
@@ -850,6 +855,9 @@ pub fn restore(cloud: &Arc<CloudState>, snap: PlatformSnapshot) {
     cloud
         .marketplace_security
         .load(snap.marketplace_security.clone());
+    cloud
+        .marketplace_releases
+        .load(snap.marketplace_releases.clone());
     cloud.projects.merge_synced(SyncedProjects {
         rows: snap.projects.into_iter().collect(),
         tombstones: snap.project_tombstones,

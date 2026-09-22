@@ -8,8 +8,8 @@ use fluid_gateway::Gateway;
 use hive_controlplane::Hive;
 use hive_core::now_ms;
 use hive_edge::{
-    bot::BotPolicy, BotManager, CdnCache, ConcurrencyLimiter, CronScheduler, NodeRegistry,
-    RateLimiter, Router, RuntimeCache, Waf, WorkflowEngine,
+    BotManager, CdnCache, ConcurrencyLimiter, CronScheduler, NodeRegistry, RateLimiter, Router,
+    RuntimeCache, Waf, WorkflowEngine, bot::BotPolicy,
 };
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
@@ -319,6 +319,10 @@ pub struct CloudState {
     /// Durable HMAC nonce replay facts, opaque advertisements, and Marketplace
     /// payment intents. This is replicated because public API reads round-robin.
     pub marketplace_security: crate::marketplace::MarketplaceSecurityStore,
+    /// DevHub-owned immutable Marketplace releases and allocation attachments.
+    /// This remains distinct from deployment records: one release can be
+    /// deployed multiple times and capability rollback must remain observable.
+    pub marketplace_releases: crate::marketplace_releases::MarketplaceReleaseStore,
     pub audit: crate::audit::AuditLog,
     pub notifications: crate::notifications::NotificationStore,
     /// Web-push subscriptions + SMS targets + delivery watermarks (see
@@ -628,9 +632,8 @@ impl CloudState {
         )
         .unwrap_or_else(|error| panic!("deployment ledger failed closed: {error:#}"));
         let integrity_signer = Arc::new(
-            crate::integrity_signer::IntegritySigner::open_or_create(&node_name).unwrap_or_else(
-                |error| panic!("integrity signing key failed closed: {error:#}"),
-            ),
+            crate::integrity_signer::IntegritySigner::open_or_create(&node_name)
+                .unwrap_or_else(|error| panic!("integrity signing key failed closed: {error:#}")),
         );
         let runtime_artifact_transfer = crate::runtime_artifact_transfer::TransferService::open(
             crate::persist::data_dir().join("runtime-artifacts-v1"),
@@ -807,6 +810,7 @@ impl CloudState {
             billing: crate::billing::BillingStore::new(),
             marketplace_allocations: crate::marketplace::AllocationStore::default(),
             marketplace_security: crate::marketplace::MarketplaceSecurityStore::default(),
+            marketplace_releases: crate::marketplace_releases::MarketplaceReleaseStore::default(),
             audit: crate::audit::AuditLog::new(crate::persist::data_dir().join("audit.jsonl")),
             notifications: crate::notifications::NotificationStore::new(),
             push: crate::push::PushStore::new(),
@@ -1064,11 +1068,13 @@ mod tests {
     }
 
     fn dep(proj: &str) -> Vec<fluid_core::DeploymentInfo> {
-        vec![serde_json::from_value(serde_json::json!({
-            "id": format!("d-{proj}"), "project": proj, "functions": [],
-            "created_at_ms": 0u64, "alias": ""
-        }))
-        .unwrap()]
+        vec![
+            serde_json::from_value(serde_json::json!({
+                "id": format!("d-{proj}"), "project": proj, "functions": [],
+                "created_at_ms": 0u64, "alias": ""
+            }))
+            .unwrap(),
+        ]
     }
 
     #[test]
@@ -1128,7 +1134,7 @@ mod tests {
 
     #[test]
     fn route_ttl_merge_survives_transient_miss_but_drops_stale() {
-        use super::{merge_routes_ttl, PeerRoute};
+        use super::{PeerRoute, merge_routes_ttl};
         use std::collections::{HashMap, HashSet};
         let mk = |node: &str, seen: u64| PeerRoute {
             node_id: node.into(),
@@ -1142,10 +1148,10 @@ mod tests {
         let ttl = 30_000u64;
         // prev: host "app" served by peer-X (seen recently) and peer-Y (seen long ago).
         let mut prev: HashMap<String, Vec<PeerRoute>> = HashMap::new();
-        prev.insert(
-            "app".into(),
-            vec![mk("peer-x", now - 5_000), mk("peer-y", now - 90_000)],
-        );
+        prev.insert("app".into(), vec![
+            mk("peer-x", now - 5_000),
+            mk("peer-y", now - 90_000),
+        ]);
 
         // This round we reached only peer-z (serves "app"); X and Y were NOT reached.
         let mut fresh: HashMap<String, Vec<PeerRoute>> = HashMap::new();

@@ -7,19 +7,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::State,
     http::HeaderMap,
     middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
-    Router,
 };
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 use tower::ServiceExt;
@@ -367,7 +367,7 @@ impl AllocationStore {
                 .map(|row| (row.marketplace_order_id.clone(), row)),
         );
     }
-    fn get(&self, id: &str) -> Option<Allocation> {
+    pub(crate) fn get(&self, id: &str) -> Option<Allocation> {
         self.0.read().get(id).cloned()
     }
     fn put_if_absent(&self, allocation: Allocation) -> Result<Allocation, Allocation> {
@@ -404,7 +404,6 @@ struct AllocationRequest {
     payment_intent_id: String,
     tenant_id: String,
     resources: ResourceRequirements,
-    deployment: fluid_core::GitDeployRequest,
 }
 
 /// All Marketplace service routes live beneath this router-level HMAC gate.
@@ -1430,53 +1429,21 @@ async fn submit_allocation(
         Err(old) => {
             return Ok(Json(
                 json!({"allocation_id": old.marketplace_order_id, "status": old.status}),
-            ))
+            ));
         }
     };
     cloud
         .marketplace_security
         .bind_allocation_key(key, allocation.marketplace_order_id.clone());
     crate::persist::persist(&cloud);
-    let mut deployment = request.deployment;
-    deployment.no_fanout = false;
-    deployment.fanout_secondary = false;
-    deployment.project_incarnation = None;
-    deployment.marketplace_placement = Some(fluid_core::MarketplacePlacementSnapshot {
-        contract_version: 1,
-        policy_version: 1,
-        marketplace_order_id: allocation.marketplace_order_id.clone(),
-        buyer_tenant_id: allocation.tenant_id.clone(),
-        retrieved_at_ms: now,
-        approved_node_ids: allocation.approved_node_ids.clone(),
-        policy: json!({"source":"marketplace-verified-settlement",
-            "payment_intent_id": intent.payment_intent_id,
-            "settlement_key": intent.settlement_key,
-            "configuration_reference": intent.settlement.configuration_reference}),
-    });
-    match crate::admin::start_named_deploy(&cloud, &allocation.tenant_id, deployment, None).await {
-        Ok(result) => {
-            let mut allocation = allocation;
-            allocation.status = "scheduled".into();
-            allocation.routed_build_id = result["build_id"].as_str().map(ToOwned::to_owned);
-            allocation.updated_at_ms = hive_core::now_ms();
-            cloud.marketplace_allocations.update(allocation.clone());
-            crate::persist::persist(&cloud);
-            Ok(Json(
-                json!({"allocation_id": allocation.marketplace_order_id, "status": allocation.status, "build_id": allocation.routed_build_id}),
-            ))
-        }
-        Err(_) => {
-            let mut allocation = allocation;
-            allocation.status = "failed".into();
-            allocation.updated_at_ms = hive_core::now_ms();
-            cloud.marketplace_allocations.update(allocation.clone());
-            crate::persist::persist(&cloud);
-            Err(error(
-                axum::http::StatusCode::CONFLICT,
-                "provisioning_failed",
-            ))
-        }
-    }
+    // HMAC routes authorize settlement and capacity only.  They must never
+    // accept repository/image/build settings from Marketplace.  A separately
+    // authenticated DevHub route attaches a durable, immutable project release
+    // after exact buyer/project/revision validation.
+    Ok(Json(json!({
+        "allocation_id": allocation.marketplace_order_id,
+        "status": allocation.status
+    })))
 }
 
 fn eligible_node(cloud: &CloudState, node: &hive_edge::NodeInfo) -> bool {
