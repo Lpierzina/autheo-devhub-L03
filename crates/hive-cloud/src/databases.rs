@@ -596,6 +596,23 @@ impl DatabaseStore {
         self.dbs.read().iter().find(|x| x.id == id).cloned()
     }
 
+    /// Trusted control-plane lookup for a project-owned managed engine. This
+    /// deliberately returns the unmasked record only to in-process callers;
+    /// HTTP/database list paths continue to use [`Self::get`] and [`Self::list`].
+    /// Marketplace uses this to make its managed Postgres allocation
+    /// idempotent rather than creating an engine for every release attempt.
+    pub fn project_database_raw(&self, project: &str, kind: DbKind) -> Option<Database> {
+        self.dbs
+            .read()
+            .iter()
+            .find(|database| {
+                database.project == project
+                    && database.kind == kind
+                    && !matches!(database.status, DbStatus::Error)
+            })
+            .cloned()
+    }
+
     /// Tenant-visible credential view. The replay ledger is internal protocol
     /// state, not a connection credential, and must never ride the reveal API.
     pub fn credentials(&self, id: &str) -> Option<Database> {
