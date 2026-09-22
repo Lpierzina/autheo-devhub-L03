@@ -61,6 +61,7 @@ mod lease;
 mod listener_audit;
 mod marketplace;
 mod marketplace_gateway;
+mod marketplace_releases;
 mod memwatch;
 mod mesh_raw;
 mod mesh_shell;
@@ -1929,6 +1930,7 @@ async fn async_main() -> anyhow::Result<()> {
             .unwrap_or(120),
     );
     let admin_router = admin::router(cloud.clone())
+        .merge(crate::marketplace_releases::routes(cloud.clone()))
         // Marketplace is authenticated with its own service credential inside
         // the module; it must never consume a DevHub hive_jwt.
         .merge(crate::marketplace::routes(cloud.clone()))

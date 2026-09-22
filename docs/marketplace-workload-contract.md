@@ -1,37 +1,38 @@
-# Marketplace workload handoff
+# Marketplace workload contract
 
-Marketplace selects capacity. It never supplies a repository URL, build
-configuration, image reference, runtime secret, mesh address, certificate, or
-client connectivity data to DevHub.
+Marketplace settlement, DevHub project ownership, and workload deployment are
+separate authorities.
 
-## DevHub release authority
+1. Marketplace calls only the four private HMAC routes through
+   `https://devhub-marketplace.internal`. Allocation accepts settlement and
+   resource facts only; it never accepts repository URLs, image references,
+   Dockerfile/Compose settings, or any browser-supplied deployment request.
+2. An authenticated DevHub caller creates a durable project release at
+   `POST /v1/projects/{project}/marketplace-releases`. A release is immutable
+   authority distinct from a deployment record and has a platform-issued
+   `release_id`, `project_id`, revision, publication/revocation state,
+   source/build identity, and workload capabilities.
+3. An authenticated DevHub caller attaches an allocation through
+   `POST /v1/projects/{project}/marketplace-workloads`. DevHub verifies exact
+   project ownership and buyer tenant, then requires the release to exist, be
+   published, not be revoked, and have the exact requested revision. The
+   resulting workload snapshot persists the allocation, project, release,
+   revision, buyer tenant, and client-certificate delivery request.
 
-`devhub_project_release` is a DevHub-owned immutable record:
+Client certificate delivery requires the release capability exactly:
 
-```json
-{
-  "release_id": "rel_...",
-  "project_id": "prj_...",
-  "revision": "sha256:...",
-  "published": true,
-  "revoked": false,
-  "marketplace_capabilities": {
-    "workload_client_certificate": { "mode": "files-v1", "reload": true }
-  }
-}
+```yaml
+workload_client_certificate:
+  mode: files-v1
+  reload: true
 ```
 
-The authenticated DevHub attachment endpoint validates that the project belongs
-to the authenticated tenant and that the selected published release belongs to
-that exact project and revision. Marketplace receives neither this record nor
-its resolved deployment configuration.
+Project identity is not a capability. In particular, a rollback to a release
+without this declaration cannot inherit `files-v1` from a later release and
+must fail the credential/readiness path.
 
-## Credential delivery
-
-Client credentials are issued only when the persisted allocation attachment
-requests `{"enabled":true,"mode":"files-v1"}` and the immutable release
-declares the matching `files-v1` capability with `reload:true`. The runtime
-mount is allocation-scoped and contains only:
+When the capability is available, the allocation-scoped, platform-owned
+runtime credential mount contains only:
 
 | path | mode |
 | --- | --- |
@@ -39,33 +40,28 @@ mount is allocation-scoped and contains only:
 | `/var/run/autheo/workload-client/tls.crt` | `0444` |
 | `/var/run/autheo/workload-client/tls.key` | `0400` |
 
-The containing directory is read-only to the workload. Certificates, private
-keys, database URLs, and source configuration are never written to deployment
-records, build environments, build logs, Marketplace API responses, or
-ordinary environment variables.
+The containing directory is not writable by the workload. Certificates,
+private keys, database URLs, and source configuration never belong in
+deployment records, build environments, build logs, Marketplace API responses,
+or ordinary environment variables.
 
-## Operator configuration
+The private gateway is mTLS transport only. The final receiving DevHub
+Marketplace router still verifies the request's HMAC, timestamp, body digest,
+durable nonce, and idempotency semantics. Iroh trust authorizes the internal
+mesh leg only and is never Marketplace authorization.
 
-```text
-# Explicitly identifies the DevHub Marketplace workload project.
-HIVE_MARKETPLACE_PROJECT_ID=prj_...
+`DATABASE_URL`, private keys, CA material, HMAC secrets, Iroh identities,
+tickets, relays, peer addresses, node identity, and routing decisions are not
+valid workload metadata and must never appear in release/workload records or
+browser-visible responses.
 
-# Enables the reviewed v2 Buildah-in-runsc capability only after its deployment
-# declaration and probe have succeeded. Absence is a typed failure for
-# Dockerfile/Compose source deployments.
-HIVE_BUILD_EXECUTOR_V2=1
+Settlement stays `settlement_unavailable` until the selected
+`autheo-testnet-v1` profile verifies all of:
 
-# Private-only Marketplace gateway. This must be the Marketplace project's
-# Podman bridge address; wildcard, loopback, public, and link-local addresses
-# are rejected.
-HIVE_MARKETPLACE_GATEWAY_BIND=10.x.y.z:8443
-HIVE_MARKETPLACE_GATEWAY_SERVER_NAME=devhub-marketplace.internal
+- `HIVE_MARKETPLACE_TESTNET_THEO_TOKEN`
+- `HIVE_MARKETPLACE_TESTNET_ATOMIC_SPLIT_CONTRACT`
+- `HIVE_MARKETPLACE_TESTNET_FEE_RECIPIENT`
+- `HIVE_MARKETPLACE_TESTNET_ATOMIC_SPLIT_AUDITED=1`
+- `HIVE_MARKETPLACE_TESTNET_CONFIGURATION_REFERENCE`
 
-# Root-owned state directory for the private CA and rotated workload material.
-# It must not be a project checkout, deployment root, or publicly served path.
-HIVE_MARKETPLACE_IDENTITY_DIR=/var/lib/hive/marketplace-identity
-```
-
-Settlement remains unavailable unless the existing audited Testnet configuration
-is complete. Enabling builder-v2, a workload release, or mTLS does not change
-that independent fail-closed condition.
+No contract deployment or audit-completion claim is made by this integration.
