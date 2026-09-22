@@ -57,6 +57,10 @@
     - name: Create and verify the policy-labeled Netavark network
       ansible.builtin.import_tasks: 45-network.yml
 
+    - name: Provision the separate exact-target Marketplace migration network
+      ansible.builtin.import_tasks: 60-migration-network.yml
+      when: build_executor_migration_enabled | bool
+
     - name: Run destructive functional probes with guaranteed cleanup
       ansible.builtin.import_tasks: 50-probe.yml
 

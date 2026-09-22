@@ -258,6 +258,32 @@ Public TCP 443 can carry an application-layer tunnel. The reviewed image and
 coordinator-authored command surface remain part of the security boundary; no
 host credential, proxy, socket, or secret environment may cross it.
 
+## Marketplace migration network
+
+Ordinary BuildExecutor jobs remain `--network=none`. Marketplace SQL migration
+is the only separately gated attachment and is enabled only with
+`build_executor_migration_enabled: true` plus one canonical managed Postgres
+IPv4 target, an IPv4-only dedicated bridge/subnet/gateway, and the reviewed
+capability identifiers. The target is infrastructure inventory, not tenant,
+repository, release, environment, or browser input; credentials remain in the
+existing secret-file path and never enter capability JSON or nftables.
+
+Provisioning installs root-owned mode-pinned verifier copies and lifecycle
+lock, adds the labeled DNS-disabled Podman network, loads a separate nftables
+table, then hashes the verifier bytes before publishing the nested capability.
+The verifier accepts only `--migration-target <canonical-ipv4>:5432`; it checks
+all trusted artifacts, capability identity/version, the live network, and live
+nft JSON. The only new flow is bridge-to-exact-target TCP/5432 plus
+established/related return traffic. IPv6, DNS, host/fleet/public/private
+ranges, DNAT, lateral bridge forwarding, other ports, and default egress drop.
+
+Any failed precondition removes the published capability rather than enabling a
+fallback. Migration containers and tmpfs volumes retain the existing managed
+labels and cancellation-safe cleanup; firewall stop/recovery uses the existing
+reaper. Operators must supply non-overlapping migration network values and the
+platform-managed target, run the role serially, and verify the capability only
+after the role's live verifier succeeds.
+
 ## Playbook integration required (not changed here)
 
 Add a dedicated `[build_executors]` inventory group and its immutable pins,

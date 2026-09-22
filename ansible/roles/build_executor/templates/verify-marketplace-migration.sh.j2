@@ -1,0 +1,43 @@
+#!/usr/bin/bash
+# {{ ansible_managed }}
+set -euo pipefail
+umask 077
+[[ $# -eq 2 && $1 == --migration-target ]] || exit 64
+target=${2%:5432}
+[[ $2 == "${target}:5432" ]] || exit 1
+exec 9>>{{ build_executor_migration_lock_path | quote }}
+/usr/bin/flock --shared 9
+/usr/bin/python3 - "$target" <<'PY'
+import hashlib, ipaddress, json, pathlib, stat, subprocess, sys
+target = sys.argv[1]
+ip = ipaddress.IPv4Address(target)
+if str(ip) != target or ip.is_unspecified or ip.is_loopback or ip.is_link_local or ip.is_multicast or target == "255.255.255.255": raise SystemExit(1)
+def trusted(path, mode):
+ p=pathlib.Path(path); s=p.lstat()
+ if not stat.S_ISREG(s.st_mode) or s.st_uid or s.st_gid or stat.S_IMODE(s.st_mode)!=mode: raise SystemExit(1)
+ return p
+cap=trusted({{ build_executor_capability_path | to_json }},0o600)
+lock=trusted({{ build_executor_migration_lock_path | to_json }},0o600)
+policy=trusted({{ build_executor_nft_policy_path | to_json }},0o600)
+wrapper=trusted({{ build_executor_podman_path | to_json }},0o755)
+for path in ({{ build_executor_migration_verify_path | to_json }}, {{ build_executor_migration_target_verify_path | to_json }}): trusted(path,0o755)
+doc=json.loads(cap.read_text())
+m=doc.get("migration_network")
+if not isinstance(m,dict) or m.get("capability_id")!="hive-marketplace-migration-network" or m.get("capability_version")!=1 or m.get("policy_version")!=1: raise SystemExit(1)
+for key,path in (("network_verify_sha256",{{ build_executor_migration_verify_path | to_json }}),("target_verify_sha256",{{ build_executor_migration_target_verify_path | to_json }})):
+ if m.get(key)!=""+hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest(): raise SystemExit(1)
+if m.get("network_policy_digest")!="sha256:"+hashlib.sha256(policy.read_bytes()).hexdigest(): raise SystemExit(1)
+net=json.loads(subprocess.check_output([str(wrapper),"network","inspect",m["network_name"]],text=True))[0]
+subnets=net.get("subnets") or []
+if not (net.get("driver")=="bridge" and net.get("network_interface")==m["network_bridge"] and net.get("ipv6_enabled") is False and net.get("dns_enabled") is False and net.get("internal") is False and (net.get("labels")or{}).get("io.hive.build-executor.policy-id")==m["network_policy_id"] and len(subnets)==1 and subnets[0].get("subnet")==m["network_subnet"] and subnets[0].get("gateway")==m["network_gateway"]): raise SystemExit(1)
+nft={{ build_executor_nft_binary | to_json }}
+subprocess.run([nft, "flush", "set", "inet", m["nft_table"], "migration_target_ipv4"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+subprocess.run([nft, "add", "element", "inet", m["nft_table"], "migration_target_ipv4", "{", target, "}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def table(family,name): return json.loads(subprocess.check_output([nft,"-j","list","table",family,name],text=True))["nftables"]
+for family,name in (("inet",m["nft_table"]),("bridge",m["nft_bridge_table"])):
+ rows=table(family,name)
+ if sum("table" in r for r in rows)!=1 or any(r.get("rule",{}).get("comment") in ("migration-target-5432","migration-return") and target not in json.dumps(r) for r in rows): raise SystemExit(1)
+comments=[r["rule"].get("comment") for r in table("inet",m["nft_table"]) if "rule" in r]
+required=["migration-input-drop","migration-ipv6-drop","migration-return-ipv6-drop","migration-dnat-drop","migration-target-5432","migration-egress-drop","migration-return","migration-ingress-drop"]
+if comments!=required: raise SystemExit(1)
+PY

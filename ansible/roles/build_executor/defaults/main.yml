@@ -168,6 +168,28 @@ build_executor_lock_path: /run/lock/hive-build-executor.lock
 build_executor_lock_wait_seconds: 300
 build_executor_reap_helper_path: "{{ build_executor_libexec_dir }}/reap-stale-probes"
 
+# Marketplace migrations are a separate, opt-in host capability. Empty target
+# means no migration capability is published; ordinary executor operation stays
+# available and offline.
+build_executor_migration_enabled: false
+# The exact target is deliberately absent from inventory and capability JSON.
+# marketplace_migrations supplies the validated DbKind::Postgres net_host to
+# the root verifier at job activation time.
+build_executor_migration_network_name: hive-marketplace-migration
+build_executor_migration_network_bridge: hivemig0
+build_executor_migration_network_subnet: ""
+build_executor_migration_network_gateway: ""
+build_executor_migration_policy_id: marketplace-migration-v1
+build_executor_migration_capability_id: hive-marketplace-migration-network
+build_executor_migration_capability_version: 1
+build_executor_migration_policy_version: 1
+build_executor_migration_nft_table: hive_marketplace_migration
+build_executor_migration_nft_bridge_table: hive_marketplace_migration_bridge
+build_executor_migration_nft_policy_path: /etc/nftables.d/hive-marketplace-migration.nft
+build_executor_migration_verify_path: "{{ build_executor_libexec_dir }}/verify-marketplace-migration"
+build_executor_migration_target_verify_path: "{{ build_executor_libexec_dir }}/verify-marketplace-migration-target"
+build_executor_migration_lock_path: /run/lock/hive-marketplace-migration.lock
+
 # Live probe settings. The registry endpoint must authenticate its TLS name; a
 # 200 or registry-standard 401 proves public HTTPS. The listener makes the host
 # gateway/private-address denial observable rather than relying on a closed port.

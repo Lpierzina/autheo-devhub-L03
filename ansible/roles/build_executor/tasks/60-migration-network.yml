@@ -1,0 +1,71 @@
+---
+- name: Validate Marketplace migration subnet
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import ipaddress, sys
+        gateway = ipaddress.ip_address(sys.argv[1])
+        net = ipaddress.ip_network(sys.argv[2], strict=True)
+        if net.version != 4 or gateway.version != 4 or gateway not in net or gateway in (net.network_address, net.broadcast_address): raise SystemExit(1)
+      - "{{ build_executor_migration_network_gateway }}"
+      - "{{ build_executor_migration_network_subnet }}"
+  changed_when: false
+
+- name: Install Marketplace migration verifier
+  ansible.builtin.template:
+    src: verify-marketplace-migration.sh.j2
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+    unsafe_writes: false
+  loop:
+    - "{{ build_executor_migration_verify_path }}"
+    - "{{ build_executor_migration_target_verify_path }}"
+
+- name: Create the root-only Marketplace migration lifecycle lock
+  ansible.builtin.file:
+    path: "{{ build_executor_migration_lock_path }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Create exact IPv4-only Marketplace migration network
+  ansible.builtin.command:
+    argv:
+      - "{{ build_executor_podman_path }}"
+      - network
+      - create
+      - --driver=bridge
+      - "--interface-name={{ build_executor_migration_network_bridge }}"
+      - "--subnet={{ build_executor_migration_network_subnet }}"
+      - "--gateway={{ build_executor_migration_network_gateway }}"
+      - --disable-dns
+      - "--label=io.hive.build-executor.policy-id={{ build_executor_migration_policy_id }}"
+      - "{{ build_executor_migration_network_name }}"
+  register: _build_executor_migration_network_create
+  changed_when: _build_executor_migration_network_create.rc == 0
+  failed_when: >-
+    _build_executor_migration_network_create.rc != 0 and
+    'already exists' not in (_build_executor_migration_network_create.stderr | lower)
+
+- name: Calculate migration verifier digests
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  loop:
+    - "{{ build_executor_migration_verify_path }}"
+    - "{{ build_executor_migration_target_verify_path }}"
+  register: _build_executor_migration_verifiers
+
+- name: Pin migration verifier digests
+  ansible.builtin.set_fact:
+    build_executor_migration_verify_sha256: "{{ _build_executor_migration_verifiers.results[0].stat.checksum }}"
+    build_executor_migration_target_verify_sha256: "{{ _build_executor_migration_verifiers.results[1].stat.checksum }}"
+  no_log: true

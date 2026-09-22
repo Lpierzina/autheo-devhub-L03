@@ -249,6 +249,7 @@ pub struct BuildNetworkPolicy {
     pub bridge: String,
     pub subnet: String,
     pub gateway: String,
+    pub dns_enabled: bool,
     pub dns_upstream_ipv4: Vec<String>,
     pub policy_id: String,
     pub policy_digest: String,
@@ -276,6 +277,14 @@ pub struct MigrationNetworkPolicy {
 pub struct MigrationNetworkTarget {
     pub ipv4: std::net::Ipv4Addr,
     pub port: u16,
+}
+
+fn is_valid_migration_target(ipv4: std::net::Ipv4Addr) -> bool {
+    !ipv4.is_unspecified()
+        && !ipv4.is_loopback()
+        && !ipv4.is_link_local()
+        && !ipv4.is_multicast()
+        && ipv4 != std::net::Ipv4Addr::BROADCAST
 }
 
 #[derive(Clone, Debug)]
@@ -414,6 +423,9 @@ struct InstalledCapability {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InstalledMigrationNetworkCapability {
+    capability_id: String,
+    capability_version: u32,
+    policy_version: u32,
     network_name: String,
     network_bridge: String,
     network_subnet: String,
@@ -913,7 +925,11 @@ impl BuildExecutor {
             migration_network_policy: declaration
                 .migration_network
                 .map(|migration| {
-                    if migration.network_policy_id != "marketplace-migration-v1"
+                    if migration.capability_id != "hive-marketplace-migration-network"
+                        || migration.capability_version != 1
+                        || migration.policy_version != 1
+                        || migration.network_policy_id != "marketplace-migration-v1"
+                        || migration.network_dns_upstream_ipv4.len() != 0
                         || !migration.target_verify_path.is_absolute()
                     {
                         return Err(BuildExecutorError::new(
@@ -932,6 +948,7 @@ impl BuildExecutor {
                             bridge: migration.network_bridge,
                             subnet: migration.network_subnet,
                             gateway: migration.network_gateway,
+                            dns_enabled: false,
                             dns_upstream_ipv4: migration.network_dns_upstream_ipv4,
                             policy_id: migration.network_policy_id,
                             policy_digest: migration.network_policy_digest,
@@ -1309,7 +1326,7 @@ impl BuildExecutor {
         request: BuildRequest,
         target: MigrationNetworkTarget,
     ) -> Result<BuildSession> {
-        if target.port != 5432 || target.ipv4.is_unspecified() || target.ipv4.is_loopback() {
+        if target.port != 5432 || !is_valid_migration_target(target.ipv4) {
             return Err(BuildExecutorError::new(
                 BuildExecutorErrorCode::InvalidRequest,
                 "begin Marketplace migration",
@@ -1323,7 +1340,6 @@ impl BuildExecutor {
                 "MARKETPLACE_MIGRATION_NETWORK_UNAVAILABLE",
             ));
         };
-        self.verify_network_policy(&migration.policy).await?;
         validate_trusted_executable(
             &migration.target_verify_path,
             "Marketplace migration target verifier",
@@ -1722,7 +1738,7 @@ impl BuildExecutor {
             || bridge != policy.bridge
             || ipv6 != Some(false)
             || internal != Some(false)
-            || dns != Some(true)
+            || dns != Some(policy.dns_enabled)
             || !dns_exact
             || policy_label != Some(policy.policy_id.as_str())
             || !subnet_ok

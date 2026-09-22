@@ -98,6 +98,35 @@ tickets, relays, peer addresses, node identity, and routing decisions are not
 valid workload metadata and must never appear in release/workload records or
 browser-visible responses.
 
+## Managed Postgres migrations
+
+Marketplace schema files run only through the BuildExecutor migration surface.
+The migration target is read exclusively from the ready, live,
+platform-managed Postgres record; it must be a canonical usable IPv4 address
+and is passed to the host verifier only as `<ipv4>:5432`. It is never derived
+from tenant input, DNS, URLs, repository configuration, release metadata, or
+environment variables.
+
+Ordinary BuildExecutor work remains `--network=none`. A host publishes the
+separate migration capability only after Ansible has installed and verified a
+root-owned verifier, lifecycle lock, dedicated DNS-disabled Podman bridge, and
+matching live nftables policy. The policy allows solely new TCP/5432 traffic
+from that bridge to the exact declared managed address and established/related
+return traffic. IPv6, DNS, host/fleet/public/private broad egress, lateral
+containers, DNAT, wildcard targets/ports, and default forwarding are denied.
+
+Migration readiness requires the valid host capability, trusted verifier,
+matching live network/firewall state, exact managed target, successful
+attachment and migration execution, and terminal cleanup. A missing, malformed,
+stale, or unverifiable capability fails closed with a topology-free migration
+error; no alternate network mode exists. Containers, temporary volumes, and
+attachments are managed by the existing cancellation-safe BuildExecutor
+lifecycle and are removed after success, error, timeout, cancellation, or
+partial startup. Operators must set the migration-only BuildExecutor inventory
+variables and rerun the serialized role after changing a managed target; failed
+provisioning revokes the nested capability while leaving ordinary offline builds
+unchanged.
+
 Settlement stays `settlement_unavailable` until the selected
 `autheo-testnet-v1` profile verifies all of:
 
