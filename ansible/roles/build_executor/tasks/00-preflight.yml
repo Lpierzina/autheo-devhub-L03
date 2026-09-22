@@ -285,3 +285,21 @@
     fail_msg: >-
       build_executor currently supports the fleet's dnf/systemd production
       hosts only (pkg_mgr={{ ansible_facts.pkg_mgr }}, service_mgr={{ ansible_facts.service_mgr }}).
+
+- name: Require explicit Marketplace migration inputs when enabled
+  ansible.builtin.assert:
+    that:
+      - build_executor_migration_capability_id == "hive-marketplace-migration-network"
+      - build_executor_migration_capability_version | int == 1
+      - build_executor_migration_policy_version | int == 1
+      - build_executor_migration_policy_id == "marketplace-migration-v1"
+      - build_executor_migration_target_ipv4 is match('^[0-9.]+$')
+      - build_executor_migration_network_name is match('^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$')
+      - build_executor_migration_network_bridge is match('^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$')
+      - build_executor_migration_network_subnet is match('^[0-9.]+/[0-9]{1,2}$')
+      - build_executor_migration_network_gateway is match('^[0-9.]+$')
+      - build_executor_migration_nft_table is match('^[a-zA-Z][a-zA-Z0-9_]{0,31}$')
+      - build_executor_migration_nft_bridge_table is match('^[a-zA-Z][a-zA-Z0-9_]{0,31}$')
+      - build_executor_migration_lock_path is match('^/run/lock/[A-Za-z0-9._-]+$')
+    fail_msg: "Marketplace migration capability inputs are incomplete; capability will not be published."
+  when: build_executor_migration_enabled | bool

@@ -35,5 +35,29 @@
   "builder_uid": {{ build_executor_container_uid | int }},
   "builder_gid": {{ build_executor_container_gid | int }},
   "workspace_bytes": {{ build_executor_workspace_bytes | int }},
-  "builder_v2": {{ build_executor_builder_v2 | bool | to_json }}
+  "builder_v2": {{ build_executor_builder_v2 | bool | to_json }}{% if build_executor_migration_enabled | bool %},
+  "migration_network": {
+    "capability_id": {{ build_executor_migration_capability_id | to_json }},
+    "capability_version": {{ build_executor_migration_capability_version | int }},
+    "policy_version": {{ build_executor_migration_policy_version | int }},
+    "target_ipv4": {{ build_executor_migration_target_ipv4 | to_json }},
+    "network_name": {{ build_executor_migration_network_name | to_json }},
+    "network_bridge": {{ build_executor_migration_network_bridge | to_json }},
+    "network_subnet": {{ build_executor_migration_network_subnet | to_json }},
+    "network_gateway": {{ build_executor_migration_network_gateway | to_json }},
+    "network_dns_upstream_ipv4": [],
+    "network_policy_id": {{ build_executor_migration_policy_id | to_json }},
+    "network_policy_digest": {{ build_executor_policy_digest | to_json }},
+    "network_verify_path": {{ build_executor_migration_verify_path | to_json }},
+    "network_verify_sha256": {{ build_executor_migration_verify_sha256 | to_json }},
+    "nft_binary": {{ build_executor_nft_binary | to_json }},
+    "nft_policy_path": {{ build_executor_nft_policy_path | to_json }},
+    "nft_table": {{ build_executor_migration_nft_table | to_json }},
+    "nft_bridge_table": {{ build_executor_migration_nft_bridge_table | to_json }},
+    "fleet_public_ipv4": {{ build_executor_fleet_public_ipv4_sorted | to_json }},
+    "fleet_probe_ipv4": {{ build_executor_migration_target_ipv4 | to_json }},
+    "provision_lock_path": {{ build_executor_migration_lock_path | to_json }},
+    "target_verify_path": {{ build_executor_migration_target_verify_path | to_json }},
+    "target_verify_sha256": {{ build_executor_migration_target_verify_sha256 | to_json }}
+  }{% endif %}
 }

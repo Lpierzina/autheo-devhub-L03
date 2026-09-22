@@ -83,3 +83,39 @@ table bridge {{ build_executor_nft_bridge_table }} {
         ibrname "{{ build_executor_network_bridge }}" obrname "{{ build_executor_network_bridge }}" counter name lateral_denied drop comment "be-bridge-lateral"
     }
 }
+{% if build_executor_migration_enabled | bool %}
+
+# Marketplace migrations have no DNS and no ambient egress. This is separate
+# from the ordinary executor table so a migration target can never broaden it.
+table inet {{ build_executor_migration_nft_table }} {
+    comment "{{ build_executor_migration_policy_id }}"
+    counter target_allowed {}
+    counter return_allowed {}
+    counter migration_denied {}
+    counter migration_dnat_denied {}
+    counter migration_ipv6_denied {}
+    chain migration_input {
+        type filter hook input priority 9; policy accept;
+        iifname "{{ build_executor_migration_network_bridge }}" counter name migration_denied drop comment "migration-input-drop"
+    }
+    chain migration_forward {
+        type filter hook forward priority 9; policy accept;
+        iifname "{{ build_executor_migration_network_bridge }}" meta nfproto ipv6 counter name migration_ipv6_denied drop comment "migration-ipv6-drop"
+        oifname "{{ build_executor_migration_network_bridge }}" meta nfproto ipv6 counter name migration_ipv6_denied drop comment "migration-return-ipv6-drop"
+        iifname "{{ build_executor_migration_network_bridge }}" ct status dnat counter name migration_dnat_denied drop comment "migration-dnat-drop"
+        iifname "{{ build_executor_migration_network_bridge }}" ip daddr {{ build_executor_migration_target_ipv4 }} tcp dport 5432 ct state new counter name target_allowed accept comment "migration-target-5432"
+        iifname "{{ build_executor_migration_network_bridge }}" counter name migration_denied drop comment "migration-egress-drop"
+        oifname "{{ build_executor_migration_network_bridge }}" ip saddr {{ build_executor_migration_target_ipv4 }} tcp sport 5432 ct state established,related counter name return_allowed accept comment "migration-return"
+        oifname "{{ build_executor_migration_network_bridge }}" counter name migration_denied drop comment "migration-ingress-drop"
+    }
+}
+table bridge {{ build_executor_migration_nft_bridge_table }} {
+    comment "{{ build_executor_migration_policy_id }}"
+    counter migration_lateral_denied {}
+    chain migration_lateral {
+        type filter hook forward priority 9; policy accept;
+        ibrname "{{ build_executor_migration_network_bridge }}" counter name migration_lateral_denied drop comment "migration-lateral-drop"
+        obrname "{{ build_executor_migration_network_bridge }}" counter name migration_lateral_denied drop comment "migration-lateral-return-drop"
+    }
+}
+{% endif %}
