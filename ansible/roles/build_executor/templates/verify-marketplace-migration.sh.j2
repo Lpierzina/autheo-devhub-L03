@@ -47,7 +47,7 @@ if not (net.get("driver")=="bridge" and net.get("network_interface")==m["network
 def no_attachments():
  containers=net.get("containers")
  return isinstance(containers,dict) and not containers
-nft={{ build_executor_nft_binary | to_json }}
+nft=str(trusted({{ build_executor_nft_binary | to_json }},0o755))
 def table(family,name): return json.loads(subprocess.check_output([nft,"-j","list","table",family,name],text=True))["nftables"]
 def target_elements():
  rows=json.loads(subprocess.check_output([nft,"-j","list","set","inet",m["nft_table"],"migration_target_ipv4"],text=True))["nftables"]
