@@ -10727,9 +10727,9 @@ fn inject_marketplace_workload_credential(
         );
         let mut config: serde_json::Value = serde_json::from_str(&function.start_cmd[3])
             .map_err(|_| anyhow::anyhow!("marketplace_workload_certificate_runtime_unsupported"))?;
-        let object = config
-            .as_object_mut()
-            .ok_or_else(|| anyhow::anyhow!("marketplace_workload_certificate_runtime_unsupported"))?;
+        let object = config.as_object_mut().ok_or_else(|| {
+            anyhow::anyhow!("marketplace_workload_certificate_runtime_unsupported")
+        })?;
         // These platform-generated keys are never accepted from tenant
         // manifests. A preexisting value indicates an attempt to bypass the
         // immutable release authority and fails closed.
@@ -10738,7 +10738,10 @@ fn inject_marketplace_workload_credential(
                 && !object.contains_key("marketplace_credential_id"),
             "marketplace_workload_certificate_runtime_unsupported"
         );
-        object.insert("marketplace_workload_mtls".into(), serde_json::Value::Bool(true));
+        object.insert(
+            "marketplace_workload_mtls".into(),
+            serde_json::Value::Bool(true),
+        );
         object.insert(
             "marketplace_credential_id".into(),
             serde_json::Value::String(credential.clone()),

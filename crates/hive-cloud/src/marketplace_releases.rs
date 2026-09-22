@@ -292,14 +292,21 @@ async fn issue_credential(
         "rsa:2048",
         "-nodes",
         "-keyout",
-        key.to_str().ok_or("marketplace_workload_certificate_unavailable")?,
+        key.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
         "-out",
-        csr.to_str().ok_or("marketplace_workload_certificate_unavailable")?,
+        csr.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
         "-subj",
         &subject,
     ]);
     common(&mut request);
-    if !request.status().await.map(|status| status.success()).unwrap_or(false) {
+    if !request
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
         let _ = std::fs::remove_dir_all(&temporary);
         return Err("marketplace_workload_certificate_unavailable");
     }
@@ -308,20 +315,31 @@ async fn issue_credential(
         "x509",
         "-req",
         "-in",
-        csr.to_str().ok_or("marketplace_workload_certificate_unavailable")?,
+        csr.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
         "-CA",
-        ca_cert.to_str().ok_or("marketplace_workload_certificate_unavailable")?,
+        ca_cert
+            .to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
         "-CAkey",
-        ca_key.to_str().ok_or("marketplace_workload_certificate_unavailable")?,
+        ca_key
+            .to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
         "-CAcreateserial",
         "-out",
-        cert.to_str().ok_or("marketplace_workload_certificate_unavailable")?,
+        cert.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
         "-days",
         "30",
         "-sha256",
     ]);
     common(&mut sign);
-    if !sign.status().await.map(|status| status.success()).unwrap_or(false) {
+    if !sign
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
         let _ = std::fs::remove_dir_all(&temporary);
         return Err("marketplace_workload_certificate_unavailable");
     }
