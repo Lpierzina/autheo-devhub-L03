@@ -17,6 +17,7 @@ use axum::{
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::state::CloudState;
@@ -74,6 +75,10 @@ pub struct MarketplaceWorkload {
     pub revision: String,
     pub buyer_tenant: String,
     pub client_certificate_delivery_requested: bool,
+    /// Opaque platform-issued mount selector. It is deterministically bound to
+    /// the allocation/project/release tuple and contains no certificate or key.
+    #[serde(default)]
+    pub credential_id: Option<String>,
     pub created_ms: u64,
 }
 
@@ -344,12 +349,21 @@ async fn attach_workload(
     let workload = cloud
         .marketplace_releases
         .attach(MarketplaceWorkload {
-            allocation_id: request.allocation_id,
+            allocation_id: request.allocation_id.clone(),
             project_id: project,
             release_id: release.release_id,
             revision: release.revision,
             buyer_tenant: tenant,
             client_certificate_delivery_requested: request.client_certificate_delivery_requested,
+            credential_id: request.client_certificate_delivery_requested.then(|| {
+                format!(
+                    "mw-{}",
+                    &hex::encode(Sha256::digest(format!(
+                        "{}\0{}\0{}",
+                        request.allocation_id, project, release.release_id
+                    )))[..48]
+                )
+            }),
             created_ms: hive_core::now_ms(),
         })
         .map_err(|code| (axum::http::StatusCode::CONFLICT, code.into()))?;
