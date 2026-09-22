@@ -94,6 +94,24 @@ Environment=HIVE_PUBLIC_NODE_TENANTS={{ hive_public_node_tenants | default('thot
 
 EnvironmentFile=/etc/hive/hive-secrets.env
 
+{% if hive_marketplace_settlement_profile | default('') %}
+Environment=HIVE_MARKETPLACE_SETTLEMENT_PROFILE={{ hive_marketplace_settlement_profile }}
+{% endif %}
+{% if hive_marketplace_testnet_atomic_split_audited | default(false) %}
+Environment=HIVE_MARKETPLACE_TESTNET_ATOMIC_SPLIT_AUDITED=1
+{% endif %}
+{% if hive_marketplace_testnet_configuration_reference | default('') %}
+Environment=HIVE_MARKETPLACE_TESTNET_CONFIGURATION_REFERENCE={{ hive_marketplace_testnet_configuration_reference }}
+{% endif %}
+{% if hive_marketplace_project | default('') and hive_marketplace_gateway_listen | default('') %}
+Environment=HIVE_MARKETPLACE_PROJECT={{ hive_marketplace_project }}
+Environment=HIVE_MARKETPLACE_GATEWAY_HOST={{ hive_marketplace_gateway_host | default('devhub-marketplace.internal') }}
+Environment=HIVE_MARKETPLACE_GATEWAY_LISTEN={{ hive_marketplace_gateway_listen }}
+Environment=HIVE_MARKETPLACE_GATEWAY_TLS_CERT={{ hive_marketplace_gateway_tls_cert }}
+Environment=HIVE_MARKETPLACE_GATEWAY_TLS_KEY={{ hive_marketplace_gateway_tls_key }}
+Environment=HIVE_MARKETPLACE_GATEWAY_CA_CERT={{ hive_marketplace_gateway_ca_cert }}
+{% endif %}
+
 {% if vault_stripe_secret_key | default('') %}
 Environment=STRIPE_SECRET_KEY={{ vault_stripe_secret_key }}
 {% endif %}
