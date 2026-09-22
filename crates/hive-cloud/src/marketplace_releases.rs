@@ -680,10 +680,10 @@ async fn attach_workload(
         .marketplace_releases
         .attach(MarketplaceWorkload {
             allocation_id: request.allocation_id.clone(),
-            project_id: project,
+            project_id: project.clone(),
             release_id: release.release_id,
             revision: release.revision,
-            buyer_tenant: tenant,
+            buyer_tenant: tenant.clone(),
             client_certificate_delivery_requested: request.client_certificate_delivery_requested,
             credential_id,
             created_ms: hive_core::now_ms(),

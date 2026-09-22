@@ -6720,11 +6720,11 @@ async fn validate_builder_definition(
                         .unwrap_or(false),
                 "BUILDER_V2_INVALID_INPUT"
             );
-            return validate_builder_definition(
+            return Box::pin(validate_builder_definition(
                 &root,
                 &dockerfile,
                 crate::build_executor::BuildSurface::Dockerfile,
-            )
+            ))
             .await;
         }
         crate::build_executor::BuildSurface::RepositoryCommands => unreachable!(),
