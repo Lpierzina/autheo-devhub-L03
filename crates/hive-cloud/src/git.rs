@@ -3163,6 +3163,20 @@ async fn run_build(
             || actual_branch == prod_branch,
         "resolved branch {actual_branch:?} contradicts the server-owned production branch {prod_branch:?}"
     );
+    // Marketplace migrations run after the managed Postgres record is Ready
+    // and before any workload runtime environment or traffic artifact is
+    // produced. The runner's only execution surface is BuildExecutor's
+    // migration capability; its secret connection value never enters either
+    // build_env, runtime_env, deployment records, or logs.
+    if cloud
+        .marketplace_releases
+        .workload_for_project(&project)
+        .is_some()
+    {
+        crate::marketplace_migrations::run(&cloud, &project, &dir)
+            .await
+            .map_err(|code| anyhow::anyhow!("{code}"))?;
+    }
     let is_production = trust.lane.is_production();
     let allow_all_environment = !trust.lane.is_fork();
     let mut build_env = cloud.projects.env_map_for_execution_exact(

@@ -61,6 +61,7 @@ mod lease;
 mod listener_audit;
 mod marketplace;
 mod marketplace_gateway;
+mod marketplace_migrations;
 mod marketplace_releases;
 mod memwatch;
 mod mesh_raw;
