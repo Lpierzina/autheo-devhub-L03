@@ -170,3 +170,97 @@ pub(crate) fn record(
     crate::persist::persist(cloud);
     Ok(())
 }
+
+/// Run missing migrations in deterministic order inside the dedicated
+/// BuildExecutor migration sandbox. No migration command is ever spawned on
+/// the controller host or in the public workload process.
+pub(crate) async fn run(
+    cloud: &Arc<CloudState>,
+    project: &str,
+    checkout: &Path,
+) -> Result<(), &'static str> {
+    let workload = cloud
+        .marketplace_releases
+        .workload_for_project(project)
+        .ok_or("marketplace_workload_unattached")?;
+    let release = cloud
+        .marketplace_releases
+        .release(&workload.release_id)
+        .ok_or("marketplace_release_unavailable")?;
+    if !workload.client_certificate_delivery_requested
+        || !release
+            .workload_client_certificate
+            .as_ref()
+            .is_some_and(crate::marketplace_releases::WorkloadClientCertificateCapability::files_v1)
+    {
+        return Err("marketplace_workload_client_certificate_unsupported");
+    }
+    let database_id = cloud
+        .marketplace_releases
+        .managed_postgres(project)
+        .ok_or("marketplace_managed_database_unavailable")?;
+    let database = cloud
+        .databases
+        .get_raw(&database_id)
+        .filter(|database| {
+            database.kind == crate::databases::DbKind::Postgres
+                && matches!(database.status, crate::databases::DbStatus::Ready)
+                && database.mode == "live"
+        })
+        .ok_or("marketplace_managed_database_unavailable")?;
+    let target = database
+        .connection
+        .get("net_host")
+        .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+        .ok_or("marketplace_migration_network_unavailable")?;
+    let database_url = database
+        .connection
+        .get("DATABASE_URL")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .ok_or("marketplace_migration_credential_unavailable")?;
+    let expected = expected(checkout)?;
+    let _guard = MigrationRunGuard::acquire(project, &database_id)?;
+    let facts = cloud
+        .marketplace_releases
+        .migration_facts(project, &database_id);
+    let existing: BTreeMap<_, _> = facts
+        .iter()
+        .map(|fact| (fact.version.as_str(), fact))
+        .collect();
+    let executor =
+        crate::build_executor::get().map_err(|_| "marketplace_migration_isolation_unavailable")?;
+    let mut session = executor
+        .begin_migration(
+            crate::build_executor::BuildRequest {
+                checkout: checkout.to_path_buf(),
+                surface: crate::build_executor::BuildSurface::RepositoryCommands,
+            },
+            crate::build_executor::MigrationNetworkTarget {
+                ipv4: target,
+                port: 5432,
+            },
+        )
+        .await
+        .map_err(|_| "marketplace_migration_isolation_unavailable")?;
+    for migration in &expected {
+        if let Some(fact) = existing.get(migration.version.as_str()) {
+            if fact.name != migration.name || fact.content_sha256 != migration.content_sha256 {
+                return Err("marketplace_migration_digest_mismatch");
+            }
+            continue;
+        }
+        let filename = migration
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("marketplace_migration_invalid_filename")?;
+        let relative = format!("db/migrations/{filename}");
+        session
+            .run_marketplace_migration(&relative, database_url.clone(), |_| {})
+            .await
+            .map_err(|_| "marketplace_migration_failed")?;
+        record(cloud, project, &database_id, migration)?;
+    }
+    readiness(cloud, project, &database_id, &expected)
+}
