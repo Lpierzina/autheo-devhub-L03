@@ -10,7 +10,9 @@
 //! delivered to [`crate::marketplace::mesh_dispatch`], where the existing
 //! router-level HMAC middleware verifies them exactly once.
 
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
+use std::{
+    collections::BTreeMap, fs, net::SocketAddr, os::unix::fs::MetadataExt, path::Path, sync::Arc,
+};
 
 use axum::{
     body::Body,
@@ -28,6 +30,61 @@ use crate::state::CloudState;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MESH_PATH: &str = "/v1/marketplace/gateway-mesh";
+
+/// A Marketplace private gateway is authenticated twice, deliberately:
+/// rustls validates the workload's transport certificate here, while the
+/// receiving Marketplace router validates its application HMAC after the mesh
+/// hop.  A valid client certificate must never be accepted as application
+/// authorization.
+fn marketplace_mtls_config(
+    certificate: &Path,
+    private_key: &Path,
+    client_ca: &Path,
+) -> Result<Arc<rustls::ServerConfig>, &'static str> {
+    for (path, key) in [
+        (certificate, false),
+        (private_key, true),
+        (client_ca, false),
+    ] {
+        let metadata =
+            fs::symlink_metadata(path).map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+            || (key && metadata.mode() & 0o077 != 0)
+        {
+            return Err("marketplace_gateway_mtls_unavailable");
+        }
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    let ca_pem = fs::read(client_ca).map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+    let parsed: Vec<_> = rustls_pemfile::certs(&mut ca_pem.as_slice())
+        .collect::<Result<_, _>>()
+        .map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+    if parsed.is_empty() || roots.add_parsable_certificates(parsed) == (0, 0) {
+        return Err("marketplace_gateway_mtls_unavailable");
+    }
+    let certificate_pem =
+        fs::read(certificate).map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+    let chain: Vec<_> = rustls_pemfile::certs(&mut certificate_pem.as_slice())
+        .collect::<Result<_, _>>()
+        .map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+    let private_key_pem =
+        fs::read(private_key).map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+    let key = rustls_pemfile::private_key(&mut private_key_pem.as_slice())
+        .map_err(|_| "marketplace_gateway_mtls_unavailable")?
+        .ok_or("marketplace_gateway_mtls_unavailable")?;
+    let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+    let mut config = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(chain, key)
+        .map_err(|_| "marketplace_gateway_mtls_unavailable")?;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(Arc::new(config))
+}
 
 /// The sole wire shape carried through the Hive mesh for this gateway.  Do not
 /// add arbitrary headers: headers outside this list are neither needed by the
@@ -233,6 +290,15 @@ pub fn spawn(cloud: Arc<CloudState>) {
             return;
         }
     };
+    let client_ca = match std::env::var("HIVE_MARKETPLACE_GATEWAY_CLIENT_CA") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            tracing::error!(
+                "Marketplace gateway disabled: HIVE_MARKETPLACE_GATEWAY_CLIENT_CA is required"
+            );
+            return;
+        }
+    };
     let Ok(addr) = listen.parse::<SocketAddr>() else {
         tracing::error!("Marketplace gateway disabled: HIVE_MARKETPLACE_GATEWAY_LISTEN is invalid");
         return;
@@ -246,13 +312,16 @@ pub fn spawn(cloud: Arc<CloudState>) {
         return;
     }
     tokio::spawn(async move {
-        let config = match axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key).await {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::error!(%error, "Marketplace gateway TLS configuration failed");
-                return;
-            }
-        };
+        let config =
+            match marketplace_mtls_config(Path::new(&cert), Path::new(&key), Path::new(&client_ca))
+            {
+                Ok(config) => config,
+                Err(code) => {
+                    tracing::error!(code, "Marketplace gateway mTLS configuration failed");
+                    return;
+                }
+            };
+        let config = axum_server::tls_rustls::RustlsConfig::from_config(config);
         tracing::info!(%addr, "private Marketplace HTTPS gateway listening");
         if let Err(error) = axum_server::bind_rustls(addr, config)
             .serve(routes(cloud).into_make_service_with_connect_info::<SocketAddr>())

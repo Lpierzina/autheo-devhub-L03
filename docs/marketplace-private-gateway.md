@@ -35,14 +35,29 @@ HIVE_MARKETPLACE_GATEWAY_HOST=devhub-marketplace.internal
 HIVE_MARKETPLACE_GATEWAY_LISTEN=<this project's private Podman bridge IP>:9443
 HIVE_MARKETPLACE_GATEWAY_TLS_CERT=/etc/hive/marketplace-gateway.crt
 HIVE_MARKETPLACE_GATEWAY_TLS_KEY=/etc/hive/marketplace-gateway.key
-HIVE_MARKETPLACE_GATEWAY_CA_CERT=/etc/hive/marketplace-gateway-ca.crt
+HIVE_MARKETPLACE_GATEWAY_CLIENT_CA=/etc/hive/marketplace-workload-ca.crt
+HIVE_MARKETPLACE_WORKLOAD_CERT_ROOT=/var/lib/hive/marketplace-workload-certs
 HIVE_MARKETPLACE_HMAC_KEYS=<key-id>:<secret>[,...]
 ```
 
 The listener refuses wildcard and public binds. It is separate from port 8786,
-the public edge, and `api.<platform-domain>`. The Marketplace container needs
-the gateway CA through `NODE_EXTRA_CA_CERTS`; its stable URL is injected as
-`DEVHUB_PRIVATE_BACKEND_URL`.
+the public edge, and `api.<platform-domain>`. It requires a client certificate
+that chains to `HIVE_MARKETPLACE_GATEWAY_CLIENT_CA`; a TLS client identity is
+not an application authorization and never bypasses Marketplace HMAC.
+
+Workload credentials are platform-created root-owned runtime files only:
+
+```text
+/var/run/autheo/workload-client/ca.crt   0444
+/var/run/autheo/workload-client/tls.crt  0444
+/var/run/autheo/workload-client/tls.key  0400
+```
+
+The workload must explicitly declare immutable release capability
+`workload_client_certificate: { mode: "files-v1", reload: true }`. Missing,
+malformed, or unsupported declarations fail readiness; they do not downgrade
+to unauthenticated TLS. Credential files are never environment variables,
+build inputs, build logs, records, or API/browser responses.
 
 The project runtime contract is stored only in the node's secret environment:
 
@@ -55,7 +70,21 @@ HIVE_MARKETPLACE_RUNTIME_DEVHUB_MARKETPLACE_SIGNING_SECRET=...
 ```
 
 Only `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is build-visible. All other values,
-including the HMAC secret, are runtime-only project secrets.
+including the HMAC secret, are runtime-only project secrets. `DATABASE_URL`
+is also runtime-only secret material: it is never a build variable, deployment
+record, Marketplace record, API response, browser response, or log.
+
+| Value | Classification |
+| --- | --- |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | public, automatically injected at build/runtime |
+| `CLERK_SECRET_KEY` | runtime-only secret |
+| `CLERK_JWT_ISSUER` | server-only runtime configuration |
+| `DEVHUB_PRIVATE_BACKEND_URL` | automatically injected safe runtime configuration |
+| `DEVHUB_MARKETPLACE_KEY_ID` | server-only runtime configuration |
+| `DEVHUB_MARKETPLACE_SIGNING_SECRET` | runtime-only secret |
+| `HIVE_MARKETPLACE_SETTLEMENT_PROFILE` | server-only operator configuration |
+| `DATABASE_URL` | runtime-only secret, automatically injected after database readiness |
+| `HIVE_MARKETPLACE_HMAC_KEYS` | node secret, delivered only by vault/systemd secret handling |
 
 ## Routing and failures
 
