@@ -1464,6 +1464,12 @@ impl BuildExecutor {
         let workspace_volume = format!("hive-build-ws-{id}");
         let container = format!("hive-build-{id}");
         let mut cleanup = cleanup.unwrap_or_else(|| CleanupGuard::new(self));
+        if migration {
+            // CleanupGuard owns a clone so its synchronous Drop fallback keeps
+            // the trusted lifecycle lock held until verifier cleanup finishes,
+            // even though BuildSession drops its own field first.
+            cleanup.set_lifecycle_lock(lifecycle_lock.clone());
+        }
         self.create_volume(&workspace_volume, self.inner.config.limits.workspace_bytes)
             .await?;
         cleanup.add_volume(workspace_volume.clone());
@@ -3462,6 +3468,7 @@ struct CleanupState {
 struct CleanupGuard {
     podman: PathBuf,
     env: BTreeMap<String, String>,
+    lifecycle_lock: Option<Arc<std::fs::File>>,
     state: Option<CleanupState>,
 }
 
@@ -3470,6 +3477,7 @@ impl CleanupGuard {
         Self {
             podman: executor.inner.config.podman_path.clone(),
             env: executor.inner.config.podman_env.clone(),
+            lifecycle_lock: None,
             state: Some(CleanupState::default()),
         }
     }
@@ -3490,6 +3498,10 @@ impl CleanupGuard {
         if let Some(state) = self.state.as_mut() {
             state.migration_policy = Some(policy);
         }
+    }
+
+    fn set_lifecycle_lock(&mut self, lock: Option<Arc<std::fs::File>>) {
+        self.lifecycle_lock = lock;
     }
 
     async fn remove_container(&mut self, executor: &BuildExecutor, name: &str) -> Result<()> {
@@ -3565,9 +3577,13 @@ impl Drop for CleanupGuard {
         }
         let podman = self.podman.clone();
         let env = self.env.clone();
+        let lifecycle_lock = self.lifecycle_lock.take();
         let _ = std::thread::Builder::new()
             .name("hive-build-cleanup".to_string())
-            .spawn(move || cleanup_sync(&podman, &env, state));
+            .spawn(move || {
+                let _lifecycle_lock = lifecycle_lock;
+                cleanup_sync(&podman, &env, state);
+            });
     }
 }
 
