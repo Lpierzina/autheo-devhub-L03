@@ -89,6 +89,7 @@ table bridge {{ build_executor_nft_bridge_table }} {
 # from the ordinary executor table so a migration target can never broaden it.
 table inet {{ build_executor_migration_nft_table }} {
     comment "{{ build_executor_migration_policy_id }}"
+    set migration_target_ipv4 { type ipv4_addr; }
     counter target_allowed {}
     counter return_allowed {}
     counter migration_denied {}
@@ -103,9 +104,9 @@ table inet {{ build_executor_migration_nft_table }} {
         iifname "{{ build_executor_migration_network_bridge }}" meta nfproto ipv6 counter name migration_ipv6_denied drop comment "migration-ipv6-drop"
         oifname "{{ build_executor_migration_network_bridge }}" meta nfproto ipv6 counter name migration_ipv6_denied drop comment "migration-return-ipv6-drop"
         iifname "{{ build_executor_migration_network_bridge }}" ct status dnat counter name migration_dnat_denied drop comment "migration-dnat-drop"
-        iifname "{{ build_executor_migration_network_bridge }}" ip daddr {{ build_executor_migration_target_ipv4 }} tcp dport 5432 ct state new counter name target_allowed accept comment "migration-target-5432"
+        iifname "{{ build_executor_migration_network_bridge }}" ip daddr @migration_target_ipv4 tcp dport 5432 ct state new counter name target_allowed accept comment "migration-target-5432"
         iifname "{{ build_executor_migration_network_bridge }}" counter name migration_denied drop comment "migration-egress-drop"
-        oifname "{{ build_executor_migration_network_bridge }}" ip saddr {{ build_executor_migration_target_ipv4 }} tcp sport 5432 ct state established,related counter name return_allowed accept comment "migration-return"
+        oifname "{{ build_executor_migration_network_bridge }}" ip saddr @migration_target_ipv4 tcp sport 5432 ct state established,related counter name return_allowed accept comment "migration-return"
         oifname "{{ build_executor_migration_network_bridge }}" counter name migration_denied drop comment "migration-ingress-drop"
     }
 }

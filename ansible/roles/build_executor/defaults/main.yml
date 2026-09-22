@@ -172,7 +172,9 @@ build_executor_reap_helper_path: "{{ build_executor_libexec_dir }}/reap-stale-pr
 # means no migration capability is published; ordinary executor operation stays
 # available and offline.
 build_executor_migration_enabled: false
-build_executor_migration_target_ipv4: ""
+# The exact target is deliberately absent from inventory and capability JSON.
+# marketplace_migrations supplies the validated DbKind::Postgres net_host to
+# the root verifier at job activation time.
 build_executor_migration_network_name: hive-marketplace-migration
 build_executor_migration_network_bridge: hivemig0
 build_executor_migration_network_subnet: ""

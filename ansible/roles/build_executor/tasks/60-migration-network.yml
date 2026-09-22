@@ -1,17 +1,14 @@
 ---
-- name: Validate Marketplace target and migration subnet
+- name: Validate Marketplace migration subnet
   ansible.builtin.command:
     argv:
       - /usr/bin/python3
       - -c
       - |
         import ipaddress, sys
-        target, subnet, gateway = map(ipaddress.ip_address, sys.argv[1:4])
-        net = ipaddress.ip_network(sys.argv[4], strict=True)
-        if target.version != 4 or str(target) != sys.argv[1] or target.is_unspecified or target.is_loopback or target.is_link_local or target.is_multicast or str(target) == "255.255.255.255": raise SystemExit(1)
+        gateway = ipaddress.ip_address(sys.argv[1])
+        net = ipaddress.ip_network(sys.argv[2], strict=True)
         if net.version != 4 or gateway.version != 4 or gateway not in net or gateway in (net.network_address, net.broadcast_address): raise SystemExit(1)
-      - "{{ build_executor_migration_target_ipv4 }}"
-      - "{{ build_executor_migration_network_gateway }}"
       - "{{ build_executor_migration_network_gateway }}"
       - "{{ build_executor_migration_network_subnet }}"
   changed_when: false

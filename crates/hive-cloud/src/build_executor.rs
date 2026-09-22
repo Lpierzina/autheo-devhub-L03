@@ -269,7 +269,6 @@ pub struct BuildNetworkPolicy {
 #[derive(Clone, Debug)]
 pub struct MigrationNetworkPolicy {
     pub policy: BuildNetworkPolicy,
-    pub target_ipv4: std::net::Ipv4Addr,
     pub target_verify_path: PathBuf,
     pub target_verify_sha256: [u8; 32],
 }
@@ -427,7 +426,6 @@ struct InstalledMigrationNetworkCapability {
     capability_id: String,
     capability_version: u32,
     policy_version: u32,
-    target_ipv4: String,
     network_name: String,
     network_bridge: String,
     network_subnet: String,
@@ -927,12 +925,10 @@ impl BuildExecutor {
             migration_network_policy: declaration
                 .migration_network
                 .map(|migration| {
-                    let target = migration.target_ipv4.parse::<std::net::Ipv4Addr>().ok();
                     if migration.capability_id != "hive-marketplace-migration-network"
                         || migration.capability_version != 1
                         || migration.policy_version != 1
                         || migration.network_policy_id != "marketplace-migration-v1"
-                        || target.filter(is_valid_migration_target).is_none()
                         || migration.network_dns_upstream_ipv4.len() != 0
                         || !migration.target_verify_path.is_absolute()
                     {
@@ -969,7 +965,6 @@ impl BuildExecutor {
                             fleet_probe_ipv4: migration.fleet_probe_ipv4,
                             provision_lock_path: migration.provision_lock_path,
                         },
-                        target_ipv4: target.expect("validated migration target"),
                         target_verify_path: migration.target_verify_path,
                         target_verify_sha256: parse_sha256(
                             &migration.target_verify_sha256,
@@ -1345,16 +1340,6 @@ impl BuildExecutor {
                 "MARKETPLACE_MIGRATION_NETWORK_UNAVAILABLE",
             ));
         };
-        // The host declaration is intentionally a single exact destination:
-        // the verifier and nft policy cannot be repurposed by a request.
-        if migration.target_ipv4 != target.ipv4 {
-            return Err(BuildExecutorError::new(
-                BuildExecutorErrorCode::InvalidRequest,
-                "begin Marketplace migration",
-                "migration target is not a managed Postgres endpoint",
-            ));
-        }
-        self.verify_network_policy(&migration.policy).await?;
         validate_trusted_executable(
             &migration.target_verify_path,
             "Marketplace migration target verifier",
