@@ -252,24 +252,36 @@ pub(crate) async fn run(
         )
         .await
         .map_err(|_| "marketplace_migration_isolation_unavailable")?;
-    for migration in &expected {
-        if let Some(fact) = existing.get(migration.version.as_str()) {
-            if fact.name != migration.name || fact.content_sha256 != migration.content_sha256 {
-                return Err("marketplace_migration_digest_mismatch");
+    let migration_result = async {
+        for migration in &expected {
+            if let Some(fact) = existing.get(migration.version.as_str()) {
+                if fact.name != migration.name || fact.content_sha256 != migration.content_sha256 {
+                    return Err("marketplace_migration_digest_mismatch");
+                }
+                continue;
             }
-            continue;
+            let filename = migration
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("marketplace_migration_invalid_filename")?;
+            let relative = format!("db/migrations/{filename}");
+            session
+                .run_marketplace_migration(&relative, database_url.clone(), |_| {})
+                .await
+                .map_err(|_| "marketplace_migration_failed")?;
+            record(cloud, project, &database_id, migration)?;
         }
-        let filename = migration
-            .path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or("marketplace_migration_invalid_filename")?;
-        let relative = format!("db/migrations/{filename}");
-        session
-            .run_marketplace_migration(&relative, database_url.clone(), |_| {})
-            .await
-            .map_err(|_| "marketplace_migration_failed")?;
-        record(cloud, project, &database_id, migration)?;
+        Ok(())
     }
+    .await;
+    // Never report either a successful migration or its SQL failure as a
+    // cleanly terminated session until the migration-only lifecycle has
+    // removed containers/volumes and the root verifier has cleared the exact
+    // nft target and proved no attachment survives.
+    if session.destroy().await.is_err() {
+        return Err("marketplace_migration_cleanup_failed");
+    }
+    migration_result?;
     readiness(cloud, project, &database_id, &expected)
 }
