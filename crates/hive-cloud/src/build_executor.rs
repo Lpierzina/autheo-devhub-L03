@@ -1390,13 +1390,8 @@ impl BuildExecutor {
         // target through the root-owned verifier.
         let mut cleanup = CleanupGuard::new(self);
         cleanup.set_migration_policy(migration.clone());
-        self.begin_with_network(
-            request,
-            Some(migration.policy.clone()),
-            true,
-            Some(cleanup),
-        )
-        .await
+        self.begin_with_network(request, Some(migration.policy.clone()), true, Some(cleanup))
+            .await
     }
 
     async fn begin_with_network(
