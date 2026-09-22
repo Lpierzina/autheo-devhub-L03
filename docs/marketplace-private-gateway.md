@@ -32,17 +32,32 @@ Set these node-local, secret-managed values on every Marketplace-capable node:
 ```text
 HIVE_MARKETPLACE_PROJECT=marketplace
 HIVE_MARKETPLACE_GATEWAY_HOST=devhub-marketplace.internal
-HIVE_MARKETPLACE_GATEWAY_LISTEN=<this project's private Podman bridge IP>:9443
+HIVE_MARKETPLACE_GATEWAY_LISTEN=<this project's RFC1918 Podman bridge IP>:9443
 HIVE_MARKETPLACE_GATEWAY_TLS_CERT=/etc/hive/marketplace-gateway.crt
 HIVE_MARKETPLACE_GATEWAY_TLS_KEY=/etc/hive/marketplace-gateway.key
 HIVE_MARKETPLACE_GATEWAY_CA_CERT=/etc/hive/marketplace-gateway-ca.crt
 HIVE_MARKETPLACE_HMAC_KEYS=<key-id>:<secret>[,...]
 ```
 
-The listener refuses wildcard and public binds. It is separate from port 8786,
-the public edge, and `api.<platform-domain>`. The Marketplace container needs
-the gateway CA through `NODE_EXTRA_CA_CERTS`; its stable URL is injected as
-`DEVHUB_PRIVATE_BACKEND_URL`.
+The listener refuses wildcard, public, loopback, link-local, unspecified, and
+IPv6 binds. It is separate from port 8786, the public edge, and
+`api.<platform-domain>`. It requires a client certificate chained to the
+configured private CA; TLS is transport identity only and never replaces the
+Marketplace HMAC check on the receiving router.
+
+Marketplace workload credentials are runtime secret files, never environment
+values:
+
+```text
+/var/run/autheo/workload-client/ca.crt   mode 0444
+/var/run/autheo/workload-client/tls.crt  mode 0444
+/var/run/autheo/workload-client/tls.key  mode 0400
+```
+
+The directory is platform-owned and non-writable by the workload. The only
+injected DevHub routing configuration is
+`DEVHUB_PRIVATE_BACKEND_URL=https://devhub-marketplace.internal`; no public or
+localhost fallback is supported.
 
 The project runtime contract is stored only in the node's secret environment:
 
@@ -55,7 +70,9 @@ HIVE_MARKETPLACE_RUNTIME_DEVHUB_MARKETPLACE_SIGNING_SECRET=...
 ```
 
 Only `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is build-visible. All other values,
-including the HMAC secret, are runtime-only project secrets.
+including the HMAC secret, are runtime-only project secrets. Credentials must
+be delivered by the runtime secret-file mechanism above, not through
+`NODE_EXTRA_CA_CERTS` or any PEM-bearing environment variable.
 
 ## Routing and failures
 

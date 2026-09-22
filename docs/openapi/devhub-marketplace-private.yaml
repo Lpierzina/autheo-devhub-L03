@@ -220,12 +220,11 @@ components:
       properties: {payment_intent_id: {type: string}, status: {type: string}, settlement_key: {type: [string, 'null']}, settlement_contract: {type: string}, settlement_version: {type: integer}, configuration_reference: {type: string}, event_log_index: {type: [integer, 'null']}, required_confirmations: {type: integer}}
     AllocationRequest:
       type: object
-      required: [payment_intent_id, tenant_id, resources, deployment]
+      required: [payment_intent_id, tenant_id, resources]
       properties:
         payment_intent_id: {type: string}
         tenant_id: {type: string}
         resources: {type: object, properties: {vcpu: {type: integer}, memory_mb: {type: integer}, disk_gb: {type: integer}, gpu: {type: boolean}, runtime: {type: [string, 'null']}, region: {type: [string, 'null']}}}
-        deployment: {type: object, description: 'The implemented `fluid_core::GitDeployRequest` wire shape; DevHub overwrites marketplace-sensitive placement fields.'}
     AllocationResponse:
       type: object
       required: [allocation_id, status]

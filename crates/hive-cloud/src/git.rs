@@ -10414,12 +10414,6 @@ fn inject_marketplace_runtime(
     for (key, value) in values {
         runtime_env.insert(key.to_owned(), value);
     }
-    if let Some(ca) = std::env::var("HIVE_MARKETPLACE_GATEWAY_CA_CERT")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        runtime_env.insert("NODE_EXTRA_CA_CERTS".into(), ca);
-    }
     let public_key = runtime_env
         .get("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY")
         .cloned()

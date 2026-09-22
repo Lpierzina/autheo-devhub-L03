@@ -8,15 +8,15 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    Router,
     extract::{Path, State},
     http::HeaderMap,
     response::Json,
     routing::post,
+    Router,
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::state::CloudState;

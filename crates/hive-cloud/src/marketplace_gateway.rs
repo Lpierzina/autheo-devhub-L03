@@ -10,7 +10,7 @@
 //! delivered to [`crate::marketplace::mesh_dispatch`], where the existing
 //! router-level HMAC middleware verifies them exactly once.
 
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc};
 
 use axum::{
     body::Body,
@@ -206,10 +206,9 @@ fn routes(cloud: Arc<CloudState>) -> Router {
         .with_state(cloud)
 }
 
-/// Starts only when all gateway TLS settings are configured.  The address must
-/// be loopback or RFC1918/ULA; public and wildcard binds are refused.  Operators
-/// bind this to the Marketplace project's Podman bridge gateway and inject the
-/// matching private hostname into that project only.
+/// Starts only when all gateway TLS/mTLS settings are configured. The address
+/// must be the Marketplace project's RFC1918 Podman bridge address; loopback,
+/// wildcard, link-local, and public binds are refused.
 pub fn spawn(cloud: Arc<CloudState>) {
     let listen = match std::env::var("HIVE_MARKETPLACE_GATEWAY_LISTEN") {
         Ok(value) if !value.trim().is_empty() => value,
@@ -233,26 +232,36 @@ pub fn spawn(cloud: Arc<CloudState>) {
             return;
         }
     };
+    let client_ca = match std::env::var("HIVE_MARKETPLACE_GATEWAY_CA_CERT") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            tracing::error!(
+                "Marketplace gateway disabled: HIVE_MARKETPLACE_GATEWAY_CA_CERT is required"
+            );
+            return;
+        }
+    };
     let Ok(addr) = listen.parse::<SocketAddr>() else {
         tracing::error!("Marketplace gateway disabled: HIVE_MARKETPLACE_GATEWAY_LISTEN is invalid");
         return;
     };
-    let private = match addr.ip() {
-        std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
-        std::net::IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
+    let private_bridge = match addr.ip() {
+        std::net::IpAddr::V4(ip) => ip.is_private() && !ip.is_loopback() && !ip.is_link_local(),
+        std::net::IpAddr::V6(_) => false,
     };
-    if !private {
-        tracing::error!(%addr, "Marketplace gateway disabled: listener must use loopback or private/ULA address");
+    if !private_bridge {
+        tracing::error!(%addr, "Marketplace gateway disabled: listener must use an RFC1918 Podman bridge address");
         return;
     }
     tokio::spawn(async move {
-        let config = match axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key).await {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::error!(%error, "Marketplace gateway TLS configuration failed");
-                return;
-            }
-        };
+        let config =
+            match mtls_config(Path::new(&cert), Path::new(&key), Path::new(&client_ca)).await {
+                Ok(config) => config,
+                Err(error) => {
+                    tracing::error!(%error, "Marketplace gateway mTLS configuration failed");
+                    return;
+                }
+            };
         tracing::info!(%addr, "private Marketplace HTTPS gateway listening");
         if let Err(error) = axum_server::bind_rustls(addr, config)
             .serve(routes(cloud).into_make_service_with_connect_info::<SocketAddr>())
@@ -261,4 +270,32 @@ pub fn spawn(cloud: Arc<CloudState>) {
             tracing::error!(%error, "private Marketplace HTTPS gateway stopped");
         }
     });
+}
+
+async fn mtls_config(
+    cert_path: &Path,
+    key_path: &Path,
+    ca_path: &Path,
+) -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
+    let cert_pem = tokio::fs::read(cert_path).await?;
+    let key_pem = tokio::fs::read(key_path).await?;
+    let ca_pem = tokio::fs::read(ca_path).await?;
+    let certs = rustls_pemfile::certs(&mut cert_pem.as_slice()).collect::<Result<Vec<_>, _>>()?;
+    anyhow::ensure!(!certs.is_empty(), "gateway certificate chain is empty");
+    let key = rustls_pemfile::private_key(&mut key_pem.as_slice())?
+        .ok_or_else(|| anyhow::anyhow!("gateway private key is missing"))?;
+    let mut roots = rustls::RootCertStore::empty();
+    let ca_certs = rustls_pemfile::certs(&mut ca_pem.as_slice()).collect::<Result<Vec<_>, _>>()?;
+    anyhow::ensure!(!ca_certs.is_empty(), "Marketplace client CA is empty");
+    for ca in ca_certs {
+        roots.add(ca)?;
+    }
+    let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots)).build()?;
+    let mut config = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(certs, key)?;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(axum_server::tls_rustls::RustlsConfig::from_config(
+        Arc::new(config),
+    ))
 }
