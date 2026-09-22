@@ -696,7 +696,11 @@ pub(crate) fn sanitize_tag(s: &str) -> String {
     let out = out
         .trim_matches(|c| c == '-' || c == '.' || c == '_')
         .to_string();
-    if out.is_empty() { "app".into() } else { out }
+    if out.is_empty() {
+        "app".into()
+    } else {
+        out
+    }
 }
 
 pub(crate) fn project_volume_name(
@@ -2316,7 +2320,8 @@ async fn run_build(
             // `run_build`), collapsing the deploy to the primary region only —
             // while a STATELESS multi-region fanout proceeds on every target
             // exactly as before.
-            let mut ok = fanout_remote(cloud, bid, &req, &project, incarnation, &remote, true).await;
+            let mut ok =
+                fanout_remote(cloud, bid, &req, &project, incarnation, &remote, true).await;
             // DISPATCH FALLBACK. `nothing_ran` means every placed target was
             // UNREACHABLE — the request never arrived anywhere, so nothing is
             // known about the app and no node holds a half-finished build.
@@ -3160,7 +3165,7 @@ async fn run_build(
     );
     let is_production = trust.lane.is_production();
     let allow_all_environment = !trust.lane.is_fork();
-    let build_env = cloud.projects.env_map_for_execution_exact(
+    let mut build_env = cloud.projects.env_map_for_execution_exact(
         &project,
         incarnation,
         trust.lane.environment(),
@@ -3174,7 +3179,7 @@ async fn run_build(
         crate::project_settings::EnvExecutionScope::Runtime,
         allow_all_environment,
     )?;
-    let runtime_env = if req.no_fanout {
+    let mut runtime_env = if req.no_fanout {
         // Coordinator-filtered, ephemeral runtime values. Build variables are
         // always re-selected locally by explicit environment + build scope and
         // can never hitchhike in this compatibility map.
@@ -3182,6 +3187,7 @@ async fn run_build(
     } else {
         stored_runtime_env
     };
+    inject_marketplace_runtime(&project, &mut build_env, &mut runtime_env)?;
     if trust.lane.is_fork() {
         log(format!(
             "Fork preview: only explicitly preview-scoped variables are eligible ({} build, {} runtime); all-environment and production values are withheld.",
@@ -3937,8 +3943,7 @@ async fn run_build(
     {
         let ingested_early = find_workflow_manifest(&build_dir).is_some();
         let py_wdk = crate::world_queue::vercel_json_declares_workflow_worker(&build_dir);
-        let opted_out =
-            crate::world_queue::workflow_world_opted_out(cloud, &project, &build_dir);
+        let opted_out = crate::world_queue::workflow_world_opted_out(cloud, &project, &build_dir);
         tracing::info!(
             %project,
             ingested_early,
@@ -4023,16 +4028,17 @@ async fn run_build(
                 // `manifest.functions[].env` earlier in the pipeline, well
                 // before this block runs.
                 if let Ok(fresh) = cloud.projects.get_exact(&project, incarnation) {
-                    let queue_env: Vec<(String, String)> = ["HIVE_QUEUE_ENDPOINT", "HIVE_QUEUE_TOKEN"]
-                        .into_iter()
-                        .filter_map(|key| {
-                            fresh
-                                .env
-                                .iter()
-                                .find(|e| e.key == key)
-                                .map(|value| (key.to_string(), value.value.clone()))
-                        })
-                        .collect();
+                    let queue_env: Vec<(String, String)> =
+                        ["HIVE_QUEUE_ENDPOINT", "HIVE_QUEUE_TOKEN"]
+                            .into_iter()
+                            .filter_map(|key| {
+                                fresh
+                                    .env
+                                    .iter()
+                                    .find(|e| e.key == key)
+                                    .map(|value| (key.to_string(), value.value.clone()))
+                            })
+                            .collect();
                     for f in manifest.functions.iter_mut() {
                         for (k, v) in &queue_env {
                             f.env.insert(k.clone(), v.clone());
@@ -6539,7 +6545,9 @@ fn direct_launch_entry(start_cmd: &[String]) -> Option<String> {
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
-        && path.components().any(|component| matches!(component, Component::Normal(_)));
+        && path
+            .components()
+            .any(|component| matches!(component, Component::Normal(_)));
     plain_relative.then(|| candidate.clone())
 }
 
@@ -6615,7 +6623,12 @@ async fn preflight_direct_entries(
                 let mut names = Vec::new();
                 while let Ok(Some(entry)) = entries.next_entry().await {
                     let mut name = entry.file_name().to_string_lossy().into_owned();
-                    if entry.file_type().await.map(|kind| kind.is_dir()).unwrap_or(false) {
+                    if entry
+                        .file_type()
+                        .await
+                        .map(|kind| kind.is_dir())
+                        .unwrap_or(false)
+                    {
                         name.push('/');
                     }
                     names.push(name);
@@ -9596,7 +9609,11 @@ async fn command_version(program: &Path, args: &[&str], cwd: &Path) -> String {
         Ok(Ok(output)) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            if stdout.is_empty() { stderr } else { stdout }
+            if stdout.is_empty() {
+                stderr
+            } else {
+                stdout
+            }
         }
         _ => "unavailable".to_string(),
     }
@@ -10051,8 +10068,8 @@ async fn parse_expose(path: &Path) -> Option<u16> {
 /// trailingSlash, images, crons, and per-function overrides (matched by glob).
 fn apply_vercel_config(m: &mut Manifest, vc: &fluid_build::VercelConfig, log: &dyn Fn(String)) {
     use fluid_core::{
-        CondValue, CronSpec, Header, HeaderRule, ImagesConfig, LocalPattern, Redirect,
-        RemotePattern, Rewrite, RuleCondition, redirect_status,
+        redirect_status, CondValue, CronSpec, Header, HeaderRule, ImagesConfig, LocalPattern,
+        Redirect, RemotePattern, Rewrite, RuleCondition,
     };
 
     let conv_conds = |cs: &[fluid_build::VercelCondition]| -> Vec<RuleCondition> {
@@ -10319,14 +10336,96 @@ fn container_volume_cfg(
     // is pinned (unlike compose) so scale-out instances coexist; the backend
     // assigns dynamic addresses within the project subnet.
     let (net, subnet, gw) = project_net(project);
+    // The Marketplace application's stable private API hostname resolves to
+    // THIS node's bridge gateway only for the configured Marketplace project.
+    // The node-local HTTPS gateway then selects a destination over Iroh; the
+    // application never receives mesh topology.  Other tenant projects get no
+    // such host entry and cannot address the gateway by this name.
+    let hosts = std::env::var("HIVE_MARKETPLACE_PROJECT")
+        .ok()
+        .filter(|configured| configured == project)
+        .map(|_| {
+            let host = std::env::var("HIVE_MARKETPLACE_GATEWAY_HOST")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "devhub-marketplace.internal".into());
+            vec![format!("{host}:{gw}")]
+        })
+        .unwrap_or_default();
     serde_json::json!({
         "vol": name,
         "volpath": container_volume_path(volume_path),
         "net": net,
         "subnet": subnet,
         "gw": gw,
+        "hosts": hosts,
     })
     .to_string()
+}
+
+/// Inject the Marketplace application's server/runtime contract from
+/// node-owned secrets.  The repository never carries these values and the
+/// deployment request cannot override them.  Only the public Clerk key is
+/// exposed to the build, because Next.js must bake `NEXT_PUBLIC_*` values;
+/// every other value remains runtime-only.
+fn inject_marketplace_runtime(
+    project: &str,
+    build_env: &mut std::collections::BTreeMap<String, String>,
+    runtime_env: &mut std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    if std::env::var("HIVE_MARKETPLACE_PROJECT").ok().as_deref() != Some(project) {
+        return Ok(());
+    }
+    let required = |name: &str| -> anyhow::Result<String> {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("Marketplace runtime is missing required operator secret {name}")
+            })
+    };
+    let host = std::env::var("HIVE_MARKETPLACE_GATEWAY_HOST")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "devhub-marketplace.internal".into());
+    let values = [
+        (
+            "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+            required("HIVE_MARKETPLACE_RUNTIME_NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY")?,
+        ),
+        (
+            "CLERK_SECRET_KEY",
+            required("HIVE_MARKETPLACE_RUNTIME_CLERK_SECRET_KEY")?,
+        ),
+        (
+            "CLERK_JWT_ISSUER",
+            required("HIVE_MARKETPLACE_RUNTIME_CLERK_JWT_ISSUER")?,
+        ),
+        ("DEVHUB_PRIVATE_BACKEND_URL", format!("https://{host}")),
+        (
+            "DEVHUB_MARKETPLACE_KEY_ID",
+            required("HIVE_MARKETPLACE_RUNTIME_DEVHUB_MARKETPLACE_KEY_ID")?,
+        ),
+        (
+            "DEVHUB_MARKETPLACE_SIGNING_SECRET",
+            required("HIVE_MARKETPLACE_RUNTIME_DEVHUB_MARKETPLACE_SIGNING_SECRET")?,
+        ),
+    ];
+    for (key, value) in values {
+        runtime_env.insert(key.to_owned(), value);
+    }
+    if let Some(ca) = std::env::var("HIVE_MARKETPLACE_GATEWAY_CA_CERT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        runtime_env.insert("NODE_EXTRA_CA_CERTS".into(), ca);
+    }
+    let public_key = runtime_env
+        .get("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY")
+        .cloned()
+        .expect("Marketplace public key inserted above");
+    build_env.insert("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY".into(), public_key);
+    Ok(())
 }
 
 /// Deterministic per-project podman network (name, /24 subnet, gateway) in the
@@ -11640,11 +11739,9 @@ mod tests {
         assert!(adapter_manifest("p", "nextjs", &dir, None).await.is_none());
         // No server function yet → None even for opennext.
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(
-            adapter_manifest("p", "opennext", &dir, None)
-                .await
-                .is_none()
-        );
+        assert!(adapter_manifest("p", "opennext", &dir, None)
+            .await
+            .is_none());
         // Full OpenNext output → hybrid manifest (assets + origin fallthrough).
         std::fs::create_dir_all(dir.join(".open-next/server-functions/default")).unwrap();
         std::fs::write(
@@ -12200,15 +12297,13 @@ mod tests {
         assert_eq!(sanitize_tag("---weird///name---"), "weird-name");
         assert_eq!(sanitize_tag(""), "app");
         // Only [a-z0-9._-] survive.
-        assert!(
-            sanitize_tag("Foo/Bar:Baz")
-                .chars()
-                .all(|c| c.is_ascii_lowercase()
-                    || c.is_ascii_digit()
-                    || c == '.'
-                    || c == '_'
-                    || c == '-')
-        );
+        assert!(sanitize_tag("Foo/Bar:Baz")
+            .chars()
+            .all(|c| c.is_ascii_lowercase()
+                || c.is_ascii_digit()
+                || c == '.'
+                || c == '_'
+                || c == '-'));
     }
 
     #[test]

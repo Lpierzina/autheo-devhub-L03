@@ -15,12 +15,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use base64::Engine;
 use hmac::{Hmac, Mac};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
+use tower::ServiceExt;
 use uuid::Uuid;
 
 use crate::{schedule, state::CloudState};
@@ -423,6 +425,64 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
             verify_marketplace_hmac,
         ))
         .with_state(cloud)
+}
+
+/// Execute a Marketplace request received through the private node gateway.
+///
+/// The gateway serializes only the contract's allowlisted headers and raw body
+/// over authenticated Iroh gossip.  Reconstructing an ordinary request here
+/// intentionally routes it through [`routes`], so HMAC validation and nonce
+/// consumption remain at the receiving service node and happen exactly once.
+pub(crate) async fn mesh_dispatch(
+    cloud: Arc<CloudState>,
+    request: crate::marketplace_gateway::MarketplaceMeshRequest,
+) -> Option<crate::marketplace_gateway::MarketplaceMeshResponse> {
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(request.body_b64)
+        .ok()?;
+    let method = request.method.parse::<axum::http::Method>().ok()?;
+    let mut builder = axum::http::Request::builder()
+        .method(method)
+        .uri(&request.path);
+    for (name, value) in request.headers {
+        let name = axum::http::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
+        let value = value.parse::<axum::http::HeaderValue>().ok()?;
+        builder = builder.header(name, value);
+    }
+    let response = routes(cloud)
+        .oneshot(builder.body(Body::from(body)).ok()?)
+        .await;
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, 16 * 1024 * 1024).await.ok()?;
+    Some(crate::marketplace_gateway::MarketplaceMeshResponse {
+        status: parts.status.as_u16(),
+        content_type: parts
+            .headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned),
+        body_b64: base64::engine::general_purpose::STANDARD.encode(body),
+    })
+}
+
+/// Nodes suitable for terminating a Marketplace gateway request.  The
+/// advertised capacity filter is deliberately the same one that Marketplace
+/// receives; this prevents a gateway from selecting a node which the service
+/// itself would not expose for an allocation.
+pub(crate) fn gateway_targets(cloud: &CloudState) -> Vec<String> {
+    let mut targets: Vec<String> = listed_deployments(cloud)
+        .into_iter()
+        .map(|entry| entry.canonical_node_id)
+        .collect();
+    targets.sort();
+    targets.dedup();
+    // Genesis can serve the API before an operator has configured a provider
+    // recipient.  HMAC remains mandatory; this merely avoids a needless
+    // self-dial for the local private gateway.
+    if targets.is_empty() {
+        targets.push(cloud.node_name.clone());
+    }
+    targets
 }
 
 /// Operator-only visibility intentionally remains separate from the
