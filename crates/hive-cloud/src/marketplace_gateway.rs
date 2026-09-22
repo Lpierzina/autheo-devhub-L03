@@ -159,7 +159,7 @@ async fn gateway_request(State(cloud): State<Arc<CloudState>>, req: Request<Body
                 .registry
                 .nodes()
                 .into_iter()
-                .find(|node| node.name == *target);
+                .find(|node| node.id == target.as_str() || node.name == target.as_str());
             let Some(peer) = peer.and_then(|node| Some((node.peer_id?, node.iroh_addr?))) else {
                 None
             };
