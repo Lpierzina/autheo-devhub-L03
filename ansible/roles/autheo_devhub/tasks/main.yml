@@ -16,9 +16,15 @@
       - autheo_devhub_repo | length > 0
       - autheo_devhub_version | length > 0
       - autheo_devhub_install_dir | length > 1
+      - >-
+        (autheo_devhub_source_archive | length == 0 and
+         autheo_devhub_source_revision | length == 0) or
+        (autheo_devhub_source_archive | length > 0 and
+         autheo_devhub_source_revision is match('^[0-9a-f]{40,64}$'))
     fail_msg: >-
       autheo_devhub_repo, autheo_devhub_version, and
-      autheo_devhub_install_dir must be non-empty.
+      autheo_devhub_install_dir must be non-empty. A local source archive must
+      include its immutable hexadecimal source revision.
   tags: [autheo_devhub]
 
 - name: Ensure the Dev Hub staging root exists
@@ -38,7 +44,21 @@
   register: _autheo_devhub_source_stage
   tags: [autheo_devhub]
 
-- name: Obtain the requested Dev Hub source and ref
+- name: Create the local Dev Hub source checkout directory
+  ansible.builtin.file:
+    path: "{{ _autheo_devhub_source_stage.path }}/repo"
+    state: directory
+    mode: "0755"
+  tags: [autheo_devhub]
+
+- name: Obtain the requested Dev Hub source archive from the control host
+  ansible.builtin.unarchive:
+    src: "{{ autheo_devhub_source_archive }}"
+    dest: "{{ _autheo_devhub_source_stage.path }}/repo"
+  when: autheo_devhub_source_archive | length > 0
+  tags: [autheo_devhub]
+
+- name: Obtain the requested Dev Hub source and ref from its repository
   ansible.builtin.git:
     repo: "{{ autheo_devhub_repo }}"
     dest: "{{ _autheo_devhub_source_stage.path }}/repo"
@@ -46,6 +66,7 @@
     depth: 1
     single_branch: true
     force: true
+  when: autheo_devhub_source_archive | length == 0
   tags: [autheo_devhub]
 
 - name: Read the resolved Dev Hub source revision
@@ -54,6 +75,15 @@
     chdir: "{{ _autheo_devhub_source_stage.path }}/repo"
   register: _autheo_devhub_revision
   changed_when: false
+  when: autheo_devhub_source_archive | length == 0
+  tags: [autheo_devhub]
+
+- name: Record the resolved Dev Hub source revision
+  ansible.builtin.set_fact:
+    autheo_devhub_resolved_revision: >-
+      {{ autheo_devhub_source_revision | trim
+         if autheo_devhub_source_archive | length > 0
+         else _autheo_devhub_revision.stdout | trim }}
   tags: [autheo_devhub]
 
 - name: Require the Dev Hub's Next.js application source
@@ -92,13 +122,13 @@
   ansible.builtin.set_fact:
     autheo_devhub_publish: >-
       {{ (_autheo_devhub_installed_revision.stdout | trim) !=
-         (_autheo_devhub_revision.stdout | trim) }}
+         autheo_devhub_resolved_revision }}
   tags: [autheo_devhub]
 
 - name: Announce an already-published Dev Hub release
   ansible.builtin.debug:
     msg: >-
-      Autheo Dev Hub source {{ _autheo_devhub_revision.stdout | trim }} is
+      Autheo Dev Hub source {{ autheo_devhub_resolved_revision }} is
       already installed; validating the running :{{ autheo_devhub_port }}
       service without rebuilding or restarting it.
   when: not (autheo_devhub_publish | bool)
@@ -191,7 +221,7 @@
   ansible.builtin.copy:
     dest: "{{ _autheo_devhub_release_stage.path }}/.autheo-devhub-release"
     content: |
-      source_revision={{ _autheo_devhub_revision.stdout | trim }}
+      source_revision={{ autheo_devhub_resolved_revision }}
       build_id={{ _autheo_devhub_built_build_id.stdout | trim }}
     owner: root
     group: root
@@ -328,7 +358,7 @@
     - name: Assert the installed release is the source revision built for this run
       ansible.builtin.assert:
         that:
-          - (_autheo_devhub_installed_identity.stdout_lines[1] | trim) == (_autheo_devhub_revision.stdout | trim)
+          - (_autheo_devhub_installed_identity.stdout_lines[1] | trim) == autheo_devhub_resolved_revision
           - not (autheo_devhub_publish | bool) or
             (_autheo_devhub_installed_identity.stdout_lines[0] | trim) == (_autheo_devhub_built_build_id.stdout | trim)
         fail_msg: >-
