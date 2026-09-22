@@ -6584,7 +6584,7 @@ test -s "$archive"
 "#;
     cloud.builds.log(
         bid,
-        "Builder v2: validating and building OCI image in runsc isolation.".into(),
+        "Builder v2: validating and building OCI image in runsc isolation.",
     );
     isolated
         .run(
@@ -6605,7 +6605,7 @@ test -s "$archive"
     let _ = tokio::fs::remove_file(&archive).await;
     cloud.builds.log(
         bid,
-        "Builder v2: OCI image resolved to an immutable digest.".into(),
+        "Builder v2: OCI image resolved to an immutable digest.",
     );
     Ok(image)
 }
@@ -6650,9 +6650,9 @@ async fn validate_builder_definition(
             }
         }
         crate::build_executor::BuildSurface::Compose => {
-            let root: serde_yaml::Value = serde_yaml::from_str(&contents)
+            let compose: serde_yaml::Value = serde_yaml::from_str(&contents)
                 .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
-            let services = root
+            let services = compose
                 .get("services")
                 .and_then(serde_yaml::Value::as_mapping)
                 .ok_or_else(|| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
@@ -6720,11 +6720,11 @@ async fn validate_builder_definition(
                         .unwrap_or(false),
                 "BUILDER_V2_INVALID_INPUT"
             );
-            return validate_builder_definition(
+            return Box::pin(validate_builder_definition(
                 &root,
                 &dockerfile,
                 crate::build_executor::BuildSurface::Dockerfile,
-            )
+            ))
             .await;
         }
         crate::build_executor::BuildSurface::RepositoryCommands => unreachable!(),

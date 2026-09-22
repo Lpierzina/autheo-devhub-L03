@@ -7,7 +7,7 @@
 
 use std::{
     collections::BTreeMap,
-    path::{Path, PathBuf},
+    path::{Path as StdPath, PathBuf},
     sync::Arc,
 };
 
@@ -292,7 +292,7 @@ fn configured_path(name: &str) -> Result<PathBuf, &'static str> {
         .ok_or("marketplace_workload_certificate_unavailable")
 }
 
-fn trusted_directory(path: &Path) -> Result<(), &'static str> {
+fn trusted_directory(path: &StdPath) -> Result<(), &'static str> {
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "marketplace_workload_certificate_unavailable")?;
@@ -307,7 +307,7 @@ fn trusted_directory(path: &Path) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn trusted_ca_file(path: &Path, private: bool) -> Result<(), &'static str> {
+fn trusted_ca_file(path: &StdPath, private: bool) -> Result<(), &'static str> {
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "marketplace_workload_certificate_unavailable")?;
@@ -680,10 +680,10 @@ async fn attach_workload(
         .marketplace_releases
         .attach(MarketplaceWorkload {
             allocation_id: request.allocation_id.clone(),
-            project_id: project,
+            project_id: project.clone(),
             release_id: release.release_id,
             revision: release.revision,
-            buyer_tenant: tenant,
+            buyer_tenant: tenant.clone(),
             client_certificate_delivery_requested: request.client_certificate_delivery_requested,
             credential_id,
             created_ms: hive_core::now_ms(),

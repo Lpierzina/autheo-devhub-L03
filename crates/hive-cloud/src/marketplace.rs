@@ -450,7 +450,8 @@ pub(crate) async fn mesh_dispatch(
     }
     let response = routes(cloud)
         .oneshot(builder.body(Body::from(body)).ok()?)
-        .await;
+        .await
+        .ok()?;
     let (parts, body) = response.into_parts();
     let body = axum::body::to_bytes(body, 16 * 1024 * 1024).await.ok()?;
     Some(crate::marketplace_gateway::MarketplaceMeshResponse {
