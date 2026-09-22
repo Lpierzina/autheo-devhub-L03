@@ -6437,16 +6437,59 @@ async fn produce_manifest(
     // project namespace. Takes precedence over a lone Dockerfile (it expresses the
     // full topology). Single-Dockerfile projects are unaffected.
     let compose_path = crate::compose::compose_file(dir);
-    if compose_path.is_some() {
-        anyhow::bail!(
-            "BUILD_ISOLATION_UNSUPPORTED_SURFACE: builder protocol v1 rejects Compose source builds; no repository command was run on the host"
-        );
-    }
     let dockerfile = container_build_file(dir);
-    if dockerfile.is_some() {
-        anyhow::bail!(
-            "BUILD_ISOLATION_UNSUPPORTED_SURFACE: builder protocol v1 rejects Dockerfile and Containerfile source builds; no repository command was run on the host"
-        );
+    if let Some(compose) = compose_path {
+        let isolated = require_build_session(&mut isolated)?;
+        let image = build_oci_source(
+            cloud,
+            bid,
+            isolated,
+            dir,
+            &compose,
+            crate::build_executor::BuildSurface::Compose,
+        )
+        .await?;
+        return image_container_manifest(
+            cloud,
+            bid,
+            project,
+            incarnation,
+            &image,
+            Some(3000),
+            Some(ServiceProtocol::Http),
+            0,
+            0.0,
+            0,
+            None,
+        )
+        .await;
+    }
+    if let Some(dockerfile) = dockerfile {
+        let isolated = require_build_session(&mut isolated)?;
+        let port = parse_expose(&dockerfile).await.unwrap_or(3000);
+        let image = build_oci_source(
+            cloud,
+            bid,
+            isolated,
+            dir,
+            &dockerfile,
+            crate::build_executor::BuildSurface::Dockerfile,
+        )
+        .await?;
+        return image_container_manifest(
+            cloud,
+            bid,
+            project,
+            incarnation,
+            &image,
+            Some(port),
+            Some(ServiceProtocol::Http),
+            0,
+            0.0,
+            0,
+            None,
+        )
+        .await;
     }
     if let Ok(s) = tokio::fs::read_to_string(dir.join("fluid.json")).await {
         if let Some(session) = isolated.as_mut() {
@@ -6482,6 +6525,241 @@ async fn produce_manifest(
         )
         .await
     }
+}
+
+/// Build a Dockerfile or the single source-built Compose service wholly inside
+/// the live-probed BuildExecutor. The host only imports the executor-produced
+/// OCI archive after it has been copied back through the existing sealed-output
+/// path; it never receives the checkout as a bind mount and never invokes a
+/// host-native image builder.
+async fn build_oci_source(
+    cloud: &Arc<CloudState>,
+    bid: &str,
+    isolated: &mut IsolatedBuild,
+    dir: &Path,
+    definition: &Path,
+    surface: crate::build_executor::BuildSurface,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        !isolated.host_build && isolated.builder_v2,
+        "BUILDER_V2_UNAVAILABLE: OCI source builds require the runsc BuildExecutor"
+    );
+    let definition = validate_builder_definition(dir, definition, surface).await?;
+    let definition_name = definition
+        .strip_prefix(dir)
+        .ok()
+        .and_then(|path| path.to_str())
+        .ok_or_else(|| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT: invalid build definition"))?;
+    let archive_name = format!(".hive-builder-v2-{}.oci", Uuid::new_v4().simple());
+    let tag = format!("localhost/hive-source-{}:build", Uuid::new_v4().simple());
+    let script = r#"set -eu
+definition=$1
+archive=$2
+tag=$3
+case "$definition" in
+  ""|/*|*..*|*\\*) printf '%s\n' BUILDER_V2_INVALID_INPUT >&2; exit 41 ;;
+esac
+test -f "$definition"
+test ! -L "$definition"
+rm -f -- "$archive"
+buildah --storage-driver=vfs bud --isolation=chroot --format=oci --layers=false \
+  --no-cache --file "$definition" --tag "$tag" .
+buildah --storage-driver=vfs push --format=oci "$tag" "oci-archive:$archive:hive-workload"
+test -s "$archive"
+"#;
+    cloud.builds.log(
+        bid,
+        "Builder v2: validating and building OCI image in runsc isolation.".into(),
+    );
+    isolated
+        .run(
+            dir,
+            script,
+            "builder-v2 OCI source build",
+            &[definition_name.to_owned(), archive_name.clone(), tag],
+            false,
+            cloud,
+            bid,
+            &Default::default(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("BUILDER_V2_BUILD_FAILED"))?;
+    isolated.finish().await?;
+    let archive = dir.join(&archive_name);
+    let image = load_attested_oci_archive(&archive).await?;
+    let _ = tokio::fs::remove_file(&archive).await;
+    cloud.builds.log(
+        bid,
+        "Builder v2: OCI image resolved to an immutable digest.".into(),
+    );
+    Ok(image)
+}
+
+/// Validate all repository-directed OCI inputs before the executor sees them.
+/// Error strings intentionally carry no checkout path, host detail, or topology.
+async fn validate_builder_definition(
+    dir: &Path,
+    definition: &Path,
+    surface: crate::build_executor::BuildSurface,
+) -> anyhow::Result<PathBuf> {
+    let root = tokio::fs::canonicalize(dir)
+        .await
+        .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+    let candidate = tokio::fs::canonicalize(definition)
+        .await
+        .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+    anyhow::ensure!(
+        candidate.starts_with(&root)
+            && tokio::fs::symlink_metadata(&candidate)
+                .await
+                .map(|m| m.is_file() && !m.file_type().is_symlink())
+                .unwrap_or(false),
+        "BUILDER_V2_INVALID_INPUT"
+    );
+    let contents = tokio::fs::read_to_string(&candidate)
+        .await
+        .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+    anyhow::ensure!(contents.len() <= 1024 * 1024, "BUILDER_V2_INVALID_INPUT");
+    match surface {
+        crate::build_executor::BuildSurface::Dockerfile => {
+            for line in contents.lines() {
+                let directive = line.trim().to_ascii_lowercase();
+                anyhow::ensure!(
+                    !directive.starts_with("add http")
+                        && !directive.contains("--mount")
+                        && !directive.contains("--network=host")
+                        && !directive.contains("--privileged")
+                        && !directive.contains("--device"),
+                    "BUILDER_V2_UNSUPPORTED_SURFACE"
+                );
+            }
+        }
+        crate::build_executor::BuildSurface::Compose => {
+            let root: serde_yaml::Value = serde_yaml::from_str(&contents)
+                .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+            let services = root
+                .get("services")
+                .and_then(serde_yaml::Value::as_mapping)
+                .ok_or_else(|| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+            anyhow::ensure!(services.len() == 1, "BUILDER_V2_UNSUPPORTED_SURFACE");
+            let service = services
+                .values()
+                .next()
+                .and_then(serde_yaml::Value::as_mapping)
+                .ok_or_else(|| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+            for forbidden in [
+                "privileged",
+                "network_mode",
+                "volumes",
+                "devices",
+                "secrets",
+                "configs",
+                "pid",
+                "ipc",
+            ] {
+                anyhow::ensure!(
+                    !service.contains_key(&serde_yaml::Value::String(forbidden.into())),
+                    "BUILDER_V2_UNSUPPORTED_SURFACE"
+                );
+            }
+            let build = service
+                .get(&serde_yaml::Value::String("build".into()))
+                .ok_or_else(|| anyhow::anyhow!("BUILDER_V2_UNSUPPORTED_SURFACE"))?;
+            let context = match build {
+                serde_yaml::Value::String(value) => value.as_str(),
+                serde_yaml::Value::Mapping(map) => map
+                    .get(&serde_yaml::Value::String("context".into()))
+                    .and_then(serde_yaml::Value::as_str)
+                    .unwrap_or("."),
+                _ => return Err(anyhow::anyhow!("BUILDER_V2_INVALID_INPUT")),
+            };
+            let context = crate::build_executor::WorkspacePath::parse(context.to_owned())
+                .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+            anyhow::ensure!(context.as_str() == ".", "BUILDER_V2_UNSUPPORTED_SURFACE");
+            let context = root.join(context.as_str());
+            anyhow::ensure!(
+                tokio::fs::canonicalize(&context)
+                    .await
+                    .map(|path| path.starts_with(&root))
+                    .unwrap_or(false),
+                "BUILDER_V2_INVALID_INPUT"
+            );
+            let dockerfile = match build {
+                serde_yaml::Value::Mapping(map) => map
+                    .get(&serde_yaml::Value::String("dockerfile".into()))
+                    .and_then(serde_yaml::Value::as_str)
+                    .unwrap_or("Dockerfile"),
+                _ => "Dockerfile",
+            };
+            let dockerfile = crate::build_executor::WorkspacePath::parse(dockerfile.to_owned())
+                .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+            let dockerfile = root.join(dockerfile.as_str());
+            let dockerfile = tokio::fs::canonicalize(dockerfile)
+                .await
+                .map_err(|_| anyhow::anyhow!("BUILDER_V2_INVALID_INPUT"))?;
+            anyhow::ensure!(
+                dockerfile.starts_with(&root)
+                    && tokio::fs::symlink_metadata(&dockerfile)
+                        .await
+                        .map(|m| m.is_file() && !m.file_type().is_symlink())
+                        .unwrap_or(false),
+                "BUILDER_V2_INVALID_INPUT"
+            );
+            return validate_builder_definition(
+                &root,
+                &dockerfile,
+                crate::build_executor::BuildSurface::Dockerfile,
+            )
+            .await;
+        }
+        crate::build_executor::BuildSurface::RepositoryCommands => unreachable!(),
+    }
+    Ok(candidate)
+}
+
+/// Import the sealed archive without building on the host, then select only the
+/// image ID that Podman reports after import. A tag is never returned to the
+/// deployment manifest.
+async fn load_attested_oci_archive(archive: &Path) -> anyhow::Result<String> {
+    let metadata = tokio::fs::symlink_metadata(archive)
+        .await
+        .map_err(|_| anyhow::anyhow!("BUILDER_V2_OUTPUT_INVALID"))?;
+    anyhow::ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() > 0,
+        "BUILDER_V2_OUTPUT_INVALID"
+    );
+    let output = Command::new("podman")
+        .arg("load")
+        .arg("--input")
+        .arg(archive)
+        .env("PATH", podman_path_env())
+        .output()
+        .await
+        .map_err(|_| anyhow::anyhow!("BUILDER_V2_IMPORT_FAILED"))?;
+    anyhow::ensure!(output.status.success(), "BUILDER_V2_IMPORT_FAILED");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let loaded = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Loaded image: "))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("BUILDER_V2_OUTPUT_INVALID"))?;
+    let inspect = Command::new("podman")
+        .args(["image", "inspect", "--format", "{{.Id}}", loaded])
+        .env("PATH", podman_path_env())
+        .output()
+        .await
+        .map_err(|_| anyhow::anyhow!("BUILDER_V2_IMPORT_FAILED"))?;
+    anyhow::ensure!(inspect.status.success(), "BUILDER_V2_IMPORT_FAILED");
+    let image = String::from_utf8_lossy(&inspect.stdout).trim().to_owned();
+    anyhow::ensure!(
+        image.starts_with("sha256:")
+            && image.len() == 71
+            && image[7..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+        "BUILDER_V2_OUTPUT_INVALID"
+    );
+    Ok(image)
 }
 
 /// The module a direct-interpreter `start_cmd` names, when the argv is one
@@ -9127,6 +9405,7 @@ fn build_executor_platform_fault(error: &anyhow::Error) -> bool {
 struct IsolatedBuild {
     root: PathBuf,
     session: Option<crate::build_executor::BuildSession>,
+    builder_v2: bool,
     /// When set, repository commands run as PLAIN HOST PROCESSES in the
     /// checkout, exactly as `MockBackend`/`LiteboxBackend` have always built
     /// (AGENTS.md: litebox `run_build` is byte-identical to
@@ -9155,6 +9434,7 @@ impl IsolatedBuild {
         Ok(Self {
             root: root.to_path_buf(),
             session: Some(session),
+            builder_v2: executor.capability().builder_v2,
             host_build: false,
         })
     }
@@ -9167,6 +9447,7 @@ impl IsolatedBuild {
         Self {
             root: root.to_path_buf(),
             session: None,
+            builder_v2: false,
             host_build: true,
         }
     }
@@ -10583,30 +10864,37 @@ async fn image_container_manifest(
     let path = podman_path_env();
     // Fully qualify short names (`user/img` → `docker.io/user/img`) — Linux podman
     // rejects unqualified refs ("short-name resolution enforced").
-    let qualified = qualify_image_ref(image);
+    let qualified = if image.starts_with("sha256:") {
+        image.to_owned()
+    } else {
+        qualify_image_ref(image)
+    };
     let image = qualified.as_str();
-    // Pull the image (fail the build with the registry error if it can't be fetched —
-    // e.g. not found / private registry needing auth).
-    log(format!("Pulling image {image} …"));
-    let t0 = now_ms();
-    let out = Command::new("podman")
-        .args(["pull", image])
-        .env("PATH", &path)
-        .output()
-        .await?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let msg = err
-            .lines()
-            .rev()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("pull failed");
-        anyhow::bail!("podman pull {image} failed: {}", msg.trim());
+    // A builder-v2 image has already been imported from the sealed OCI archive
+    // and is addressed only by its local content digest. Pulling it would turn
+    // a mutable registry/tag into deployment authority.
+    if !image.starts_with("sha256:") {
+        log(format!("Pulling image {image} …"));
+        let t0 = now_ms();
+        let out = Command::new("podman")
+            .args(["pull", image])
+            .env("PATH", &path)
+            .output()
+            .await?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let msg = err
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("pull failed");
+            anyhow::bail!("podman pull {image} failed: {}", msg.trim());
+        }
+        log(format!(
+            "Pulled {image} in {}ms",
+            now_ms().saturating_sub(t0)
+        ));
     }
-    log(format!(
-        "Pulled {image} in {}ms",
-        now_ms().saturating_sub(t0)
-    ));
 
     // Port + protocol: explicit values win outright. Otherwise auto-detect from the
     // image's own `ExposedPorts` (falling back to 8080/http when nothing is exposed

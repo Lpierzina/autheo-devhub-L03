@@ -34,5 +34,6 @@
   "fleet_probe_ipv4": {{ build_executor_fleet_public_ipv4_sorted[0] | to_json }},
   "builder_uid": {{ build_executor_container_uid | int }},
   "builder_gid": {{ build_executor_container_gid | int }},
-  "workspace_bytes": {{ build_executor_workspace_bytes | int }}
+  "workspace_bytes": {{ build_executor_workspace_bytes | int }},
+  "builder_v2": {{ build_executor_builder_v2 | bool | to_json }}
 }

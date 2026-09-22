@@ -295,6 +295,10 @@ pub struct BuildExecutorConfig {
     /// `None` means `--network=none`. Some means attach only to the named,
     /// live-verified host policy network.
     pub network_policy: Option<BuildNetworkPolicy>,
+    /// Explicit host-published capability for OCI source builds.  Existing
+    /// executor installations deliberately omit this and therefore remain
+    /// repository-command-only until Ansible has completed the v2 probe.
+    pub builder_v2: bool,
 }
 
 const INSTALLED_CAPABILITY_PATH: &str = "/var/lib/hive/build-executor.json";
@@ -382,6 +386,8 @@ struct InstalledCapability {
     builder_uid: u32,
     builder_gid: u32,
     workspace_bytes: u64,
+    #[serde(default)]
+    builder_v2: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,6 +410,7 @@ pub struct BuildCapability {
     pub gid: u32,
     pub volume_driver: String,
     pub egress: BuildEgressCapability,
+    pub builder_v2: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -874,6 +881,7 @@ impl BuildExecutor {
                 fleet_probe_ipv4: declaration.fleet_probe_ipv4,
                 provision_lock_path: declaration.provision_lock_path,
             }),
+            builder_v2: declaration.builder_v2,
         };
         Self::new(config).await
     }
@@ -906,6 +914,15 @@ impl BuildExecutor {
             &mut hasher,
             "builder-image",
             config.builder_image.as_bytes(),
+        );
+        digest_field(
+            &mut hasher,
+            "builder-v2",
+            if config.builder_v2 {
+                b"enabled"
+            } else {
+                b"disabled"
+            },
         );
         digest_field(&mut hasher, "builder-init", BUILDER_INIT_PATH.as_bytes());
         for capability in BUILDER_CAPABILITIES {
@@ -1081,6 +1098,7 @@ impl BuildExecutor {
                     gid: config.user.gid,
                     volume_driver: config.volume.driver.clone(),
                     egress: BuildEgressCapability::Denied,
+                    builder_v2: config.builder_v2,
                 },
             }),
         };
@@ -1131,6 +1149,7 @@ impl BuildExecutor {
             gid: config.user.gid,
             volume_driver: config.volume.driver.clone(),
             egress,
+            builder_v2: config.builder_v2,
         })
     }
 
@@ -1203,11 +1222,11 @@ impl BuildExecutor {
     pub async fn begin(&self, request: BuildRequest) -> Result<BuildSession> {
         let surface = request.surface;
         let deadline = Instant::now() + self.inner.config.limits.max_total_time;
-        if surface != BuildSurface::RepositoryCommands {
+        if surface != BuildSurface::RepositoryCommands && !self.inner.config.builder_v2 {
             return Err(BuildExecutorError::new(
                 BuildExecutorErrorCode::UnsupportedSurface,
                 "begin build",
-                "builder protocol v1 rejects Dockerfile and Compose surfaces",
+                "BUILDER_V2_UNAVAILABLE: host capability does not attest OCI source builds",
             ));
         }
         let requested_metadata = tokio::fs::symlink_metadata(&request.checkout)

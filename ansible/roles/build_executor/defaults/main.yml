@@ -2,6 +2,11 @@
 # Fail-closed capability publication. The consumer must refuse to execute when
 # this file is absent or its protocol is unknown.
 build_executor_protocol: "hive-build-executor/v1"
+# OCI source builds are separately capability-gated. The role's functional
+# probe proves nested Buildah can emit an OCI archive before this is published;
+# an absent/false declaration keeps Dockerfile and Compose source builds
+# refused without a host-native fallback.
+build_executor_builder_v2: true
 build_executor_capability_path: /var/lib/hive/build-executor.json
 build_executor_state_dir: /var/lib/hive/build-executor
 build_executor_libexec_dir: /usr/local/libexec/hive-build-executor
