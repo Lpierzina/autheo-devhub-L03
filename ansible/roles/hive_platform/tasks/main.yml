@@ -21,13 +21,8 @@
   no_log: true
   notify: restart hive-node
 
-- name: Create Marketplace workload credential root
-  ansible.builtin.file:
-    path: "{{ hive_marketplace_workload_cert_root | default('/var/lib/hive/marketplace-workload-certs') }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0750"
+- name: Provision Marketplace private certificate authority and credential state
+  ansible.builtin.include_tasks: marketplace_certificates.yml
   when: hive_marketplace_project | default('')
 
 
