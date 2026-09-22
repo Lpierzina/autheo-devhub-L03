@@ -1,0 +1,68 @@
+---
+# Marketplace TLS is a node-controlled transport boundary.  These paths are
+# deliberately fixed; workload code can select only a platform-issued opaque
+# credential id and can never turn this into a host-file mount feature.
+- name: Create root-owned Marketplace certificate directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "/etc/hive/marketplace-ca", mode: "0700" }
+    - { path: "/var/lib/hive/marketplace-workload-certs", mode: "0750" }
+    - { path: "/var/lib/hive/marketplace-workload-certs/.rotation", mode: "0700" }
+
+- name: Require a vault-managed fleet Marketplace CA
+  ansible.builtin.assert:
+    that:
+      - vault_hive_marketplace_ca_key | default('') | length > 0
+      - vault_hive_marketplace_ca_cert | default('') | length > 0
+    fail_msg: Marketplace requires the shared private CA from Ansible vault.
+  no_log: true
+
+- name: Install the vault-managed Marketplace private CA
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "/etc/hive/marketplace-ca/ca.key", mode: "0400", content: "{{ vault_hive_marketplace_ca_key }}" }
+    - { path: "/etc/hive/marketplace-ca/ca.crt", mode: "0444", content: "{{ vault_hive_marketplace_ca_cert }}" }
+  no_log: true
+
+- name: Require vault-managed Marketplace gateway credentials when enabled
+  ansible.builtin.assert:
+    that:
+      - vault_hive_marketplace_gateway_tls_key | default('') | length > 0
+      - vault_hive_marketplace_gateway_tls_cert | default('') | length > 0
+    fail_msg: Marketplace gateway requires vault-managed TLS certificate and key.
+  when: hive_marketplace_gateway_listen | default('')
+  no_log: true
+
+- name: Install the vault-managed Marketplace gateway credentials
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "/etc/hive/marketplace-ca/gateway.key", mode: "0400", content: "{{ vault_hive_marketplace_gateway_tls_key }}" }
+    - { path: "/etc/hive/marketplace-ca/gateway.crt", mode: "0444", content: "{{ vault_hive_marketplace_gateway_tls_cert }}" }
+  when: hive_marketplace_gateway_listen | default('')
+  no_log: true
+
+- name: Require configured gateway TLS paths under the Marketplace CA root
+  ansible.builtin.assert:
+    that:
+      - hive_marketplace_gateway_tls_cert == "/etc/hive/marketplace-ca/gateway.crt"
+      - hive_marketplace_gateway_tls_key == "/etc/hive/marketplace-ca/gateway.key"
+      - hive_marketplace_gateway_ca_cert == "/etc/hive/marketplace-ca/ca.crt"
+    fail_msg: >-
+      Marketplace gateway TLS must use the root-owned fixed private-CA paths;
+      arbitrary certificate paths are refused.
+  when: hive_marketplace_gateway_listen | default('')

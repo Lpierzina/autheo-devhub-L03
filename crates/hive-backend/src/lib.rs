@@ -908,6 +908,7 @@ pub(crate) fn container_runtime() -> Option<String> {
 fn marketplace_secret_file_mounts(
     net: &serde_json::Value,
 ) -> anyhow::Result<Option<Vec<(PathBuf, &'static str)>>> {
+    const MARKETPLACE_WORKLOAD_CERT_ROOT: &str = "/var/lib/hive/marketplace-workload-certs";
     if net
         .get("marketplace_workload_mtls")
         .and_then(|v| v.as_bool())
@@ -926,9 +927,10 @@ fn marketplace_secret_file_mounts(
     {
         anyhow::bail!("MARKETPLACE_MTLS_CREDENTIAL_INVALID");
     }
-    let root = std::env::var_os("HIVE_MARKETPLACE_WORKLOAD_CERT_ROOT")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow::anyhow!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE"))?;
+    // This root is intentionally not configurable: a tenant-controlled or
+    // node-environment-selected host path would turn this constrained mount
+    // into a generic host-file mount primitive.
+    let root = PathBuf::from(MARKETPLACE_WORKLOAD_CERT_ROOT);
     let root_meta = std::fs::symlink_metadata(&root)
         .map_err(|_| anyhow::anyhow!("MARKETPLACE_MTLS_CREDENTIAL_UNAVAILABLE"))?;
     #[cfg(unix)]

@@ -1553,6 +1553,7 @@ async fn async_main() -> anyhow::Result<()> {
     // listener forwards its allowlisted contract through authenticated Iroh
     // gossip and the destination node performs Marketplace HMAC verification.
     marketplace_gateway::spawn(cloud.clone());
+    marketplace_releases::spawn_credential_rotation(cloud.clone());
 
     // Initial owner resolution (single-node: this node is owner) + seed the
     // gossiped fencing epoch.

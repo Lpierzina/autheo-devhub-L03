@@ -33,12 +33,14 @@ hive_marketplace_testnet_configuration_reference: ""
 hive_marketplace_project: ""
 hive_marketplace_gateway_host: "devhub-marketplace.internal"
 hive_marketplace_gateway_listen: ""
-hive_marketplace_gateway_tls_cert: ""
-hive_marketplace_gateway_tls_key: ""
-hive_marketplace_gateway_ca_cert: ""
+hive_marketplace_gateway_tls_cert: "/etc/hive/marketplace-ca/gateway.crt"
+hive_marketplace_gateway_tls_key: "/etc/hive/marketplace-ca/gateway.key"
+hive_marketplace_gateway_ca_cert: "/etc/hive/marketplace-ca/ca.crt"
 # Root-owned only. CA/server material and per-workload client credentials are
 # supplied from vault; no private key is placed in generated environment files.
 hive_marketplace_gateway_client_ca: ""
+# Fixed in the runtime; retained as documentation only. It is intentionally
+# not rendered into the service environment.
 hive_marketplace_workload_cert_root: "/var/lib/hive/marketplace-workload-certs"
 # HIVE_BOOTSTRAP_PEERS: one existing node's 64-hex iroh NodeId is enough for
 # a NEW node to join (see roles/mesh_bootstrap and playbooks/node-join.yml).

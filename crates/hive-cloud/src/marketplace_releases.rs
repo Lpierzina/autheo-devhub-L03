@@ -5,7 +5,11 @@
 //! to the release identity captured below.  This store contains no PEM, HMAC,
 //! source checkout, image tag, or mesh-routing material.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use axum::{
     extract::{Path, State},
@@ -18,6 +22,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::state::CloudState;
@@ -75,8 +80,9 @@ pub struct MarketplaceWorkload {
     pub revision: String,
     pub buyer_tenant: String,
     pub client_certificate_delivery_requested: bool,
-    /// Opaque platform-issued mount selector. It is deterministically bound to
-    /// the allocation/project/release tuple and contains no certificate or key.
+    /// Opaque platform-issued credential selector.  It is deterministic from
+    /// the immutable workload binding, but never names a host path or exposes
+    /// certificate material.
     #[serde(default)]
     pub credential_id: Option<String>,
     pub created_ms: u64,
@@ -197,6 +203,9 @@ impl MarketplaceReleaseStore {
                 && existing.release_id == workload.release_id
                 && existing.revision == workload.revision
                 && existing.buyer_tenant == workload.buyer_tenant
+                && existing.client_certificate_delivery_requested
+                    == workload.client_certificate_delivery_requested
+                && existing.credential_id == workload.credential_id
             {
                 Ok(existing.clone())
             } else {
@@ -216,6 +225,291 @@ impl MarketplaceReleaseStore {
             .find(|workload| workload.project_id == project)
             .cloned()
     }
+
+    /// Resolves only an exact immutable binding.  Project identity is never a
+    /// credential authority: callers must carry the allocation and release
+    /// captured when the workload was attached.
+    pub fn workload_binding(
+        &self,
+        allocation_id: &str,
+        project_id: &str,
+        release_id: &str,
+    ) -> Option<MarketplaceWorkload> {
+        self.0
+            .read()
+            .workloads
+            .iter()
+            .find(|workload| {
+                workload.allocation_id == allocation_id
+                    && workload.project_id == project_id
+                    && workload.release_id == release_id
+            })
+            .cloned()
+    }
+
+    /// Return a credential only when a project has one unambiguous immutable
+    /// workload binding. A project with zero credentials receives no mount; a
+    /// project with more than one is refused rather than guessing which
+    /// allocation/release a deployment should represent.
+    pub fn unambiguous_credential_for_project(
+        &self,
+        project: &str,
+    ) -> Result<Option<String>, &'static str> {
+        let state = self.0.read();
+        let mut credentials = state
+            .workloads
+            .iter()
+            .filter(|workload| workload.project_id == project)
+            .filter_map(|workload| workload.credential_id.as_ref())
+            .cloned();
+        let first = credentials.next();
+        if credentials.next().is_some() {
+            return Err("marketplace_workload_credential_binding_ambiguous");
+        }
+        Ok(first)
+    }
+}
+
+const CREDENTIAL_ROOT: &str = "/var/lib/hive/marketplace-workload-certs";
+const CA_CERT_ENV: &str = "HIVE_MARKETPLACE_CA_CERT";
+const CA_KEY_ENV: &str = "HIVE_MARKETPLACE_CA_KEY";
+
+fn credential_id(allocation: &str, project: &str, release: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"hive-marketplace-workload-credential-v1\0");
+    for value in [allocation, project, release] {
+        hasher.update((value.len() as u64).to_le_bytes());
+        hasher.update(value.as_bytes());
+    }
+    format!("mwc-{}", hex::encode(hasher.finalize()))
+}
+
+fn configured_path(name: &str) -> Result<PathBuf, &'static str> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or("marketplace_workload_certificate_unavailable")
+}
+
+fn trusted_directory(path: &Path) -> Result<(), &'static str> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "marketplace_workload_certificate_unavailable")?;
+    if !metadata.file_type().is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != 0
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err("marketplace_workload_certificate_unavailable");
+    }
+    Ok(())
+}
+
+fn trusted_ca_file(path: &Path, private: bool) -> Result<(), &'static str> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "marketplace_workload_certificate_unavailable")?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != 0
+        || (private && metadata.mode() & 0o077 != 0)
+        || (!private && metadata.mode() & 0o022 != 0)
+    {
+        return Err("marketplace_workload_certificate_unavailable");
+    }
+    Ok(())
+}
+
+/// Issue an allocation/project/release-bound client credential beneath the
+/// fixed root.  All subprocess output is discarded so an OpenSSL failure
+/// cannot disclose a key, CA path, or host details through an API response.
+async fn issue_credential(
+    allocation: &str,
+    project: &str,
+    release: &str,
+) -> Result<String, &'static str> {
+    let root = PathBuf::from(CREDENTIAL_ROOT);
+    let ca_cert = configured_path(CA_CERT_ENV)?;
+    let ca_key = configured_path(CA_KEY_ENV)?;
+    trusted_directory(&root)?;
+    trusted_ca_file(&ca_cert, false)?;
+    trusted_ca_file(&ca_key, true)?;
+
+    let id = credential_id(allocation, project, release);
+    let destination = root.join(&id);
+    let mut replace_existing = false;
+    if destination.exists() {
+        trusted_directory(&destination)?;
+        for (name, mode) in [("ca.crt", 0o444), ("tls.crt", 0o444), ("tls.key", 0o400)] {
+            let metadata = std::fs::symlink_metadata(destination.join(name))
+                .map_err(|_| "marketplace_workload_certificate_unavailable")?;
+            use std::os::unix::fs::MetadataExt;
+            if !metadata.file_type().is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.uid() != 0
+                || metadata.gid() != 0
+                || metadata.mode() & 0o777 != mode
+            {
+                return Err("marketplace_workload_certificate_unavailable");
+            }
+        }
+        let mut lifetime = Command::new("/usr/bin/openssl");
+        lifetime
+            .args([
+                "x509",
+                "-checkend",
+                "3600",
+                "-noout",
+                "-in",
+                destination
+                    .join("tls.crt")
+                    .to_str()
+                    .ok_or("marketplace_workload_certificate_unavailable")?,
+            ])
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut chain = Command::new("/usr/bin/openssl");
+        chain
+            .args([
+                "verify",
+                "-CAfile",
+                destination
+                    .join("ca.crt")
+                    .to_str()
+                    .ok_or("marketplace_workload_certificate_unavailable")?,
+                destination
+                    .join("tls.crt")
+                    .to_str()
+                    .ok_or("marketplace_workload_certificate_unavailable")?,
+            ])
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if lifetime
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false)
+            && chain
+                .status()
+                .await
+                .map(|status| status.success())
+                .unwrap_or(false)
+        {
+            return Ok(id);
+        }
+        replace_existing = true;
+    }
+
+    let temporary = root.join(format!(".{id}.{}", Uuid::new_v4().simple()));
+    std::fs::create_dir(&temporary).map_err(|_| "marketplace_workload_certificate_unavailable")?;
+    let key = temporary.join("tls.key");
+    let csr = temporary.join("request.csr");
+    let cert = temporary.join("tls.crt");
+    let ca_copy = temporary.join("ca.crt");
+    let subject = format!("/CN=marketplace-workload-{id}");
+    let common = |command: &mut Command| {
+        command
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    };
+    let mut request = Command::new("/usr/bin/openssl");
+    request.args([
+        "req",
+        "-new",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        key.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
+        "-out",
+        csr.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
+        "-subj",
+        &subject,
+    ]);
+    common(&mut request);
+    if !request
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err("marketplace_workload_certificate_unavailable");
+    }
+    let mut sign = Command::new("/usr/bin/openssl");
+    sign.args([
+        "x509",
+        "-req",
+        "-in",
+        csr.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
+        "-CA",
+        ca_cert
+            .to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
+        "-CAkey",
+        ca_key
+            .to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
+        "-CAcreateserial",
+        "-out",
+        cert.to_str()
+            .ok_or("marketplace_workload_certificate_unavailable")?,
+        "-days",
+        "30",
+        "-sha256",
+    ]);
+    common(&mut sign);
+    if !sign
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err("marketplace_workload_certificate_unavailable");
+    }
+    if std::fs::copy(&ca_cert, &ca_copy).is_err() {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err("marketplace_workload_certificate_unavailable");
+    }
+    for (path, mode) in [(&key, 0o400), (&cert, 0o444), (&ca_copy, 0o444)] {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).is_err() {
+            let _ = std::fs::remove_dir_all(&temporary);
+            return Err("marketplace_workload_certificate_unavailable");
+        }
+    }
+    if replace_existing {
+        // Keep the mounted directory inode stable. Renaming each file replaces
+        // the exact runtime path atomically, so a running workload observes
+        // either its old complete credential or the new complete file.
+        for name in ["ca.crt", "tls.crt", "tls.key"] {
+            if std::fs::rename(temporary.join(name), destination.join(name)).is_err() {
+                let _ = std::fs::remove_dir_all(&temporary);
+                return Err("marketplace_workload_certificate_unavailable");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&temporary);
+    } else if std::fs::rename(&temporary, &destination).is_err() {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err("marketplace_workload_certificate_unavailable");
+    }
+    Ok(id)
 }
 
 #[derive(Deserialize)]
@@ -247,6 +541,33 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
             post(attach_workload),
         )
         .with_state(cloud)
+}
+
+/// Renew bound credentials before their one-hour validity floor elapses. A
+/// failed renewal is deliberately observable in the node health/readiness log;
+/// it never falls back to a different workload's credential.
+pub fn spawn_credential_rotation(cloud: Arc<CloudState>) {
+    tokio::spawn(async move {
+        loop {
+            let workloads = cloud.marketplace_releases.snapshot().workloads;
+            for workload in workloads
+                .into_iter()
+                .filter(|workload| workload.client_certificate_delivery_requested)
+            {
+                if issue_credential(
+                    &workload.allocation_id,
+                    &workload.project_id,
+                    &workload.release_id,
+                )
+                .await
+                .is_err()
+                {
+                    tracing::error!("Marketplace workload credential readiness failed");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        }
+    });
 }
 
 async fn create_release(
@@ -346,6 +667,15 @@ async fn attach_workload(
             "marketplace_workload_client_certificate_unsupported".into(),
         ));
     }
+    let credential_id = if request.client_certificate_delivery_requested {
+        Some(
+            issue_credential(&request.allocation_id, &project, &release.release_id)
+                .await
+                .map_err(|code| (axum::http::StatusCode::SERVICE_UNAVAILABLE, code.into()))?,
+        )
+    } else {
+        None
+    };
     let workload = cloud
         .marketplace_releases
         .attach(MarketplaceWorkload {
@@ -355,15 +685,7 @@ async fn attach_workload(
             revision: release.revision,
             buyer_tenant: tenant,
             client_certificate_delivery_requested: request.client_certificate_delivery_requested,
-            credential_id: request.client_certificate_delivery_requested.then(|| {
-                format!(
-                    "mw-{}",
-                    &hex::encode(Sha256::digest(format!(
-                        "{}\0{}\0{}",
-                        request.allocation_id, project, release.release_id
-                    )))[..48]
-                )
-            }),
+            credential_id,
             created_ms: hive_core::now_ms(),
         })
         .map_err(|code| (axum::http::StatusCode::CONFLICT, code.into()))?;

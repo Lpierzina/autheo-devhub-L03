@@ -3801,6 +3801,7 @@ async fn run_build(
             apply_vercel_config(&mut manifest, vc, &|s| log(s));
         }
     }
+    inject_marketplace_workload_credential(&cloud, &project, &mut manifest)?;
 
     log("Uploading build outputs…".into());
     log(format!(
@@ -10679,10 +10680,6 @@ fn inject_marketplace_runtime(
                 anyhow::anyhow!("Marketplace runtime is missing required operator secret {name}")
             })
     };
-    let host = std::env::var("HIVE_MARKETPLACE_GATEWAY_HOST")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "devhub-marketplace.internal".into());
     let values = [
         (
             "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
@@ -10696,7 +10693,10 @@ fn inject_marketplace_runtime(
             "CLERK_JWT_ISSUER",
             required("HIVE_MARKETPLACE_RUNTIME_CLERK_JWT_ISSUER")?,
         ),
-        ("DEVHUB_PRIVATE_BACKEND_URL", format!("https://{host}")),
+        (
+            "DEVHUB_PRIVATE_BACKEND_URL",
+            "https://devhub-marketplace.internal".to_string(),
+        ),
         (
             "DEVHUB_MARKETPLACE_KEY_ID",
             required("HIVE_MARKETPLACE_RUNTIME_DEVHUB_MARKETPLACE_KEY_ID")?,
@@ -10714,6 +10714,55 @@ fn inject_marketplace_runtime(
         .cloned()
         .expect("Marketplace public key inserted above");
     build_env.insert("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY".into(), public_key);
+    Ok(())
+}
+
+/// Attach the sole fixed Marketplace credential mount selector to container
+/// functions. The selector is issued by `MarketplaceReleaseStore`, not by a
+/// project setting, deploy request, or repository manifest; hive-backend maps
+/// it to the fixed root-owned runtime files and rejects every other mount.
+fn inject_marketplace_workload_credential(
+    cloud: &CloudState,
+    project: &str,
+    manifest: &mut Manifest,
+) -> anyhow::Result<()> {
+    let credential = cloud
+        .marketplace_releases
+        .unambiguous_credential_for_project(project)
+        .map_err(|code| anyhow::anyhow!("{code}"))?;
+    let Some(credential) = credential else {
+        return Ok(());
+    };
+    for function in &mut manifest.functions {
+        anyhow::ensure!(
+            function.start_cmd.first().map(String::as_str) == Some("__container__")
+                && function.start_cmd.len() == 4,
+            "marketplace_workload_certificate_runtime_unsupported"
+        );
+        let mut config: serde_json::Value = serde_json::from_str(&function.start_cmd[3])
+            .map_err(|_| anyhow::anyhow!("marketplace_workload_certificate_runtime_unsupported"))?;
+        let object = config.as_object_mut().ok_or_else(|| {
+            anyhow::anyhow!("marketplace_workload_certificate_runtime_unsupported")
+        })?;
+        // These platform-generated keys are never accepted from tenant
+        // manifests. A preexisting value indicates an attempt to bypass the
+        // immutable release authority and fails closed.
+        anyhow::ensure!(
+            !object.contains_key("marketplace_workload_mtls")
+                && !object.contains_key("marketplace_credential_id"),
+            "marketplace_workload_certificate_runtime_unsupported"
+        );
+        object.insert(
+            "marketplace_workload_mtls".into(),
+            serde_json::Value::Bool(true),
+        );
+        object.insert(
+            "marketplace_credential_id".into(),
+            serde_json::Value::String(credential.clone()),
+        );
+        function.start_cmd[3] = serde_json::to_string(&config)
+            .map_err(|_| anyhow::anyhow!("marketplace_workload_certificate_runtime_unsupported"))?;
+    }
     Ok(())
 }
 
