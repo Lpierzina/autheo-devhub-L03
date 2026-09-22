@@ -251,6 +251,7 @@ async fn issue_credential(
 
     let id = credential_id(allocation, project, release);
     let destination = root.join(&id);
+    let mut replace_existing = false;
     if destination.exists() {
         trusted_directory(&destination)?;
         for (name, mode) in [("ca.crt", 0o444), ("tls.crt", 0o444), ("tls.key", 0o400)] {
@@ -266,7 +267,57 @@ async fn issue_credential(
                 return Err("marketplace_workload_certificate_unavailable");
             }
         }
-        return Ok(id);
+        let mut lifetime = Command::new("/usr/bin/openssl");
+        lifetime
+            .args([
+                "x509",
+                "-checkend",
+                "3600",
+                "-noout",
+                "-in",
+                destination
+                    .join("tls.crt")
+                    .to_str()
+                    .ok_or("marketplace_workload_certificate_unavailable")?,
+            ])
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut chain = Command::new("/usr/bin/openssl");
+        chain
+            .args([
+                "verify",
+                "-CAfile",
+                destination
+                    .join("ca.crt")
+                    .to_str()
+                    .ok_or("marketplace_workload_certificate_unavailable")?,
+                destination
+                    .join("tls.crt")
+                    .to_str()
+                    .ok_or("marketplace_workload_certificate_unavailable")?,
+            ])
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if lifetime
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false)
+            && chain
+                .status()
+                .await
+                .map(|status| status.success())
+                .unwrap_or(false)
+        {
+            return Ok(id);
+        }
+        replace_existing = true;
     }
 
     let temporary = root.join(format!(".{id}.{}", Uuid::new_v4().simple()));
@@ -354,7 +405,18 @@ async fn issue_credential(
             return Err("marketplace_workload_certificate_unavailable");
         }
     }
-    if std::fs::rename(&temporary, &destination).is_err() {
+    if replace_existing {
+        // Keep the mounted directory inode stable. Renaming each file replaces
+        // the exact runtime path atomically, so a running workload observes
+        // either its old complete credential or the new complete file.
+        for name in ["ca.crt", "tls.crt", "tls.key"] {
+            if std::fs::rename(temporary.join(name), destination.join(name)).is_err() {
+                let _ = std::fs::remove_dir_all(&temporary);
+                return Err("marketplace_workload_certificate_unavailable");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&temporary);
+    } else if std::fs::rename(&temporary, &destination).is_err() {
         let _ = std::fs::remove_dir_all(&temporary);
         return Err("marketplace_workload_certificate_unavailable");
     }
@@ -390,6 +452,33 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
             post(attach_workload),
         )
         .with_state(cloud)
+}
+
+/// Renew bound credentials before their one-hour validity floor elapses. A
+/// failed renewal is deliberately observable in the node health/readiness log;
+/// it never falls back to a different workload's credential.
+pub fn spawn_credential_rotation(cloud: Arc<CloudState>) {
+    tokio::spawn(async move {
+        loop {
+            let workloads = cloud.marketplace_releases.snapshot().workloads;
+            for workload in workloads
+                .into_iter()
+                .filter(|workload| workload.client_certificate_delivery_requested)
+            {
+                if issue_credential(
+                    &workload.allocation_id,
+                    &workload.project_id,
+                    &workload.release_id,
+                )
+                .await
+                .is_err()
+                {
+                    tracing::error!("Marketplace workload credential readiness failed");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        }
+    });
 }
 
 async fn create_release(
