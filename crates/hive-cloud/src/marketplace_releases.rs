@@ -157,9 +157,31 @@ impl MarketplaceReleaseStore {
             })
             .cloned()
     }
+
+    /// Return a credential only when a project has one unambiguous immutable
+    /// workload binding. A project with zero credentials receives no mount; a
+    /// project with more than one is refused rather than guessing which
+    /// allocation/release a deployment should represent.
+    pub fn unambiguous_credential_for_project(
+        &self,
+        project: &str,
+    ) -> Result<Option<String>, &'static str> {
+        let state = self.0.read();
+        let mut credentials = state
+            .workloads
+            .iter()
+            .filter(|workload| workload.project_id == project)
+            .filter_map(|workload| workload.credential_id.as_ref())
+            .cloned();
+        let first = credentials.next();
+        if credentials.next().is_some() {
+            return Err("marketplace_workload_credential_binding_ambiguous");
+        }
+        Ok(first)
+    }
 }
 
-const CREDENTIAL_ROOT_ENV: &str = "HIVE_MARKETPLACE_WORKLOAD_CERT_ROOT";
+const CREDENTIAL_ROOT: &str = "/var/lib/hive/marketplace-workload-certs";
 const CA_CERT_ENV: &str = "HIVE_MARKETPLACE_CA_CERT";
 const CA_KEY_ENV: &str = "HIVE_MARKETPLACE_CA_KEY";
 
@@ -220,7 +242,7 @@ async fn issue_credential(
     project: &str,
     release: &str,
 ) -> Result<String, &'static str> {
-    let root = configured_path(CREDENTIAL_ROOT_ENV)?;
+    let root = PathBuf::from(CREDENTIAL_ROOT);
     let ca_cert = configured_path(CA_CERT_ENV)?;
     let ca_key = configured_path(CA_KEY_ENV)?;
     trusted_directory(&root)?;
