@@ -110,6 +110,8 @@ Environment=HIVE_MARKETPLACE_GATEWAY_LISTEN={{ hive_marketplace_gateway_listen }
 Environment=HIVE_MARKETPLACE_GATEWAY_TLS_CERT={{ hive_marketplace_gateway_tls_cert }}
 Environment=HIVE_MARKETPLACE_GATEWAY_TLS_KEY={{ hive_marketplace_gateway_tls_key }}
 Environment=HIVE_MARKETPLACE_GATEWAY_CA_CERT={{ hive_marketplace_gateway_ca_cert }}
+Environment=HIVE_MARKETPLACE_GATEWAY_CLIENT_CA={{ hive_marketplace_gateway_client_ca }}
+Environment=HIVE_MARKETPLACE_WORKLOAD_CERT_ROOT={{ hive_marketplace_workload_cert_root }}
 {% endif %}
 
 {% if vault_stripe_secret_key | default('') %}
