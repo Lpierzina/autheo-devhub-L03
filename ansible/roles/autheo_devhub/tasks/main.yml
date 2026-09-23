@@ -107,6 +107,69 @@
       runtime layout.
   tags: [autheo_devhub]
 
+- name: Require the Dev Hub authentication credentials
+  ansible.builtin.assert:
+    that:
+      - (vault_hive_internal_token | default('', true) | trim) | length > 0
+      - (vault_clerk_publishable_key | default('', true) | trim) | length > 0
+      - (vault_clerk_secret_key | default('', true) | trim) | length > 0
+      - (hive_owner_email | default('', true) | trim) | length > 0
+      - (vault_hive_internal_token | default('', true)) is not search('[\r\n]')
+      - (vault_clerk_publishable_key | default('', true)) is not search('[\r\n]')
+      - (vault_clerk_secret_key | default('', true)) is not search('[\r\n]')
+      - (hive_owner_email | default('', true)) is not search('[\r\n]')
+    fail_msg: >-
+      Required Dev Hub authentication credentials are absent, empty, or
+      malformed. Refusing to alter /etc/autheo-devhub.env or publish a release.
+  no_log: true
+  tags: [autheo_devhub]
+
+- name: Provision the Dev Hub authentication environment
+  ansible.builtin.blockinfile:
+    path: /etc/autheo-devhub.env
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+    marker: "# {mark} ANSIBLE MANAGED DEV HUB AUTHENTICATION"
+    block: |
+      HIVE_INTERNAL_TOKEN={{ vault_hive_internal_token }}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY={{ vault_clerk_publishable_key }}
+      CLERK_SECRET_KEY={{ vault_clerk_secret_key }}
+      HIVE_OWNER_EMAIL={{ hive_owner_email }}
+      HIVE_AUTH_BYPASS=0
+      NEXT_PUBLIC_HIVE_DEV_MINT=0
+  register: _autheo_devhub_auth_env
+  no_log: true
+  tags: [autheo_devhub]
+
+- name: Validate the Dev Hub authentication environment file
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test "$(stat -c '%U:%G:%a' /etc/autheo-devhub.env)" = 'root:root:600'
+    for key in \
+      HIVE_INTERNAL_TOKEN \
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
+      CLERK_SECRET_KEY \
+      HIVE_OWNER_EMAIL \
+      HIVE_AUTH_BYPASS \
+      NEXT_PUBLIC_HIVE_DEV_MINT; do
+      grep -q "^${key}=" /etc/autheo-devhub.env
+    done
+    bash -n /etc/autheo-devhub.env
+  args:
+    executable: /bin/bash
+  changed_when: false
+  no_log: true
+  tags: [autheo_devhub]
+
+- name: Calculate the Dev Hub build-time Clerk configuration fingerprint
+  ansible.builtin.set_fact:
+    autheo_devhub_build_config_fingerprint: >-
+      {{ vault_clerk_publishable_key | hash('sha256') }}
+  no_log: true
+  tags: [autheo_devhub]
+
 - name: Read the installed Dev Hub release identity when present
   ansible.builtin.shell:
     cmd: >-
@@ -118,19 +181,33 @@
   changed_when: false
   tags: [autheo_devhub]
 
+- name: Read the installed Dev Hub build-time configuration fingerprint
+  ansible.builtin.shell:
+    cmd: >-
+      test -f {{ autheo_devhub_install_dir | quote }}/.autheo-devhub-release &&
+      sed -n 's/^build_config_fingerprint=//p' {{ autheo_devhub_install_dir | quote }}/.autheo-devhub-release ||
+      true
+    executable: /bin/bash
+  register: _autheo_devhub_installed_build_config
+  changed_when: false
+  tags: [autheo_devhub]
+
 - name: Decide whether this source revision needs publication
   ansible.builtin.set_fact:
     autheo_devhub_publish: >-
       {{ (_autheo_devhub_installed_revision.stdout | trim) !=
-         autheo_devhub_resolved_revision }}
+         autheo_devhub_resolved_revision or
+         (_autheo_devhub_installed_build_config.stdout | trim) !=
+         autheo_devhub_build_config_fingerprint }}
   tags: [autheo_devhub]
 
 - name: Announce an already-published Dev Hub release
   ansible.builtin.debug:
     msg: >-
       Autheo Dev Hub source {{ autheo_devhub_resolved_revision }} is
-      already installed; validating the running :{{ autheo_devhub_port }}
-      service without rebuilding or restarting it.
+      already installed with its current build-time Clerk configuration;
+      validating the running :{{ autheo_devhub_port }} service without
+      rebuilding or restarting it.
   when: not (autheo_devhub_publish | bool)
   tags: [autheo_devhub]
 
@@ -223,29 +300,11 @@
     content: |
       source_revision={{ autheo_devhub_resolved_revision }}
       build_id={{ _autheo_devhub_built_build_id.stdout | trim }}
+      build_config_fingerprint={{ autheo_devhub_build_config_fingerprint }}
     owner: root
     group: root
     mode: "0644"
   when: autheo_devhub_publish | bool
-  tags: [autheo_devhub]
-
-- name: Preserve an existing Dev Hub environment file
-  ansible.builtin.stat:
-    path: /etc/autheo-devhub.env
-  register: _autheo_devhub_env
-  no_log: true
-  tags: [autheo_devhub]
-
-- name: Create an empty Dev Hub environment file only when absent
-  ansible.builtin.copy:
-    dest: /etc/autheo-devhub.env
-    content: ""
-    owner: root
-    group: root
-    mode: "0600"
-    force: false
-  when: not _autheo_devhub_env.stat.exists
-  no_log: true
   tags: [autheo_devhub]
 
 - name: Locate the node binary for the Dev Hub service PATH
@@ -325,13 +384,16 @@
       when: autheo_devhub_publish | bool
       tags: [autheo_devhub]
 
-    - name: Restart Dev Hub only when its release or unit changed
+    - name: Restart Dev Hub only when its release, authentication environment, or unit changed
       ansible.builtin.systemd:
         name: "{{ autheo_devhub_service_name }}"
         state: restarted
         enabled: true
         daemon_reload: true
-      when: (autheo_devhub_publish | bool) or _autheo_devhub_unit.changed
+      when: >-
+        (autheo_devhub_publish | bool) or
+        _autheo_devhub_auth_env.changed or
+        _autheo_devhub_unit.changed
       tags: [autheo_devhub]
 
     - name: Ensure the unchanged Dev Hub service remains enabled and started
@@ -339,7 +401,10 @@
         name: "{{ autheo_devhub_service_name }}"
         state: started
         enabled: true
-      when: not ((autheo_devhub_publish | bool) or _autheo_devhub_unit.changed)
+      when: >-
+        not ((autheo_devhub_publish | bool) or
+             _autheo_devhub_auth_env.changed or
+             _autheo_devhub_unit.changed)
       tags: [autheo_devhub]
 
     - name: Read the installed Dev Hub BUILD_ID and release identity
