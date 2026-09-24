@@ -127,19 +127,42 @@ const allowedRedirectOrigins = (
   .filter(Boolean);
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const tree = (
+  return (
     <html
       lang="en"
       suppressHydrationWarning
       className={`${GeistSans.variable} ${GeistMono.variable} ${display.variable} ${electrolize.variable}`}
     >
       <body className="flex min-h-screen flex-col bg-bg font-sans text-fg antialiased">
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(STRUCTURED_DATA) }} />
-        <PwaRegister />
-        <VitalsBeacon />
-        <Toaster />
-        <ThemeProvider>
-          <WalletProvider>
+        {clerkEnabled ? (
+          /* Clerk's App Router provider uses Next navigation hooks internally.
+              Cache Components suspends these hooks for prerendered dynamic
+              routes, so this boundary must contain the provider itself, not
+              only chrome rendered below it. The fallback is deliberately
+              auth-neutral: it cannot reveal either dashboard or landing data
+              before Clerk's navigation state resolves. */
+          <Suspense fallback={<ClerkLoadingShell />}>
+            <ClerkProvider allowedRedirectOrigins={allowedRedirectOrigins}>
+              <RootContent>{children}</RootContent>
+            </ClerkProvider>
+          </Suspense>
+        ) : (
+          <RootContent>{children}</RootContent>
+        )}
+      </body>
+    </html>
+  );
+}
+
+function RootContent({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(STRUCTURED_DATA) }} />
+      <PwaRegister />
+      <VitalsBeacon />
+      <Toaster />
+      <ThemeProvider>
+        <WalletProvider>
           {/* Dashboard chrome (top nav + footer + overlays) is auth-gated in a
               CLIENT component so it reacts to client-side login/logout — the
               signed-out landing renders its own full-bleed nav/footer. See
@@ -154,14 +177,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </Suspense>
           <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-8 sm:px-6">{children}</main>
           <ChromeBottom />
-          </WalletProvider>
-        </ThemeProvider>
-      </body>
-    </html>
+        </WalletProvider>
+      </ThemeProvider>
+    </>
   );
-  return clerkEnabled ? (
-    <ClerkProvider allowedRedirectOrigins={allowedRedirectOrigins}>{tree}</ClerkProvider>
-  ) : (
-    tree
+}
+
+function ClerkLoadingShell() {
+  return (
+    <main aria-busy="true" className="flex min-h-[70vh] items-center justify-center">
+      <span className="h-8 w-8 animate-pulse rounded-full border border-border bg-subtle" />
+      <span className="sr-only">Loading DevHub</span>
+    </main>
   );
 }

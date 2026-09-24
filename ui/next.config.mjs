@@ -91,12 +91,10 @@ const nextConfig = {
   // migration guide: every route started opted out of instant-navigation
   // validation via `instant = false` (the cache-components-instant-false
   // codemod), then converted one at a time, verified via `npm run build` +
-  // a live `next start` smoke test after each batch. 52 of 53 routes are now
-  // fully adopted (real PPR — see the build output's ◐ markers). The one
-  // holdout is app/layout.tsx: Clerk's own <SignIn>/<SignUp> call
-  // usePathname() internally with no Suspense boundary of their own, inside
-  // <ClerkProvider> which wraps this whole tree — see that file's own
-  // comment for the full trace. Not fixable from app code alone.
+  // a live `next start` smoke test after each batch. Clerk's root provider is
+  // wrapped in its own Suspense boundary in app/layout.tsx because its App
+  // Router integration reads navigation state while prerendering dynamic
+  // routes.
   cacheComponents: true,
   partialPrefetching: true,
 
