@@ -56,14 +56,18 @@ diagnostic route. It is not a Marketplace integration endpoint and remains on
 the private/loopback Admin listener; port 8786, Swagger, and Marketplace
 private routes must not be exposed through public ingress.
 
-## Intentionally deferred work
+## Required operational extension
 
-Marketplace allocation status/read APIs, callbacks, and DevHub/Hive usage
-ingestion are not part of the current contract. `POST /usage-records` is
-buyer-authenticated, not a DevHub/Hive ingestion endpoint.
+The four routes above are the currently implemented private settlement and
+allocation boundary. They do **not** provide capacity holds, allocation status,
+callbacks, project/release handoff, execution evidence, or usage ingestion.
+Marketplace must not infer those guarantees from a successful allocation
+submission.
 
-If allocation callbacks, usage ingestion, or node-verifier completion are
-needed later, they require a separately reviewed Marketplace contract defining
-authentication, tenant binding, idempotency and replay handling, payload
-sanitization, error semantics, and operational ownership. Do not add
-speculative endpoints.
+The required reference for that extension is
+[DevHub L0 operational contract](integrations/devhub-l0-operational-contract.md).
+It defines the separately reviewed API, authentication, tenant/order binding,
+idempotency and replay semantics, reconciliation, callback delivery, and
+execution/usage authority. Its status is explicitly not implemented: adding
+one of its routes requires implementation and review; this document does not
+authorize speculative endpoints on the current router.

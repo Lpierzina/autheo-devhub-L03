@@ -10,15 +10,20 @@ request to weaken any boundary.
    schemas broad where code does not declare a stable DTO. Expanding it safely
    requires route-by-route contract work, not guessed schemas.
 
-## Intentionally deferred Marketplace work
+## Required Marketplace operational work
 
-Marketplace allocation status/read APIs, callbacks, and DevHub/Hive usage
-ingestion are not requirements of the approved integration. `POST
-/usage-records` is buyer-authenticated and is not a DevHub/Hive ingestion
-surface. If a future integration needs allocation callbacks, usage ingestion,
-or node-verifier completion, it requires a separately reviewed Marketplace
-contract covering authentication, tenant binding, idempotency and replay
-handling, payload sanitization, error semantics, and operational ownership.
+The current private API lacks capacity reservation/hold, allocation
+status/read, callbacks, server-authorized project/release/workload handoff,
+active-execution evidence, and DevHub-authoritative usage measurement. `POST
+/usage-records` remains buyer-authenticated and is not a DevHub/Hive ingestion
+surface.
+
+[DevHub L0 operational contract](../integrations/devhub-l0-operational-contract.md)
+is the required external specification before these routes are implemented.
+It defines authentication, tenant/order/release binding, idempotency and
+replay handling, reconciliation, error semantics, and operational ownership.
+The endpoints described there remain an implementation gap; the document does
+not make them available through the existing router.
 
 ## Resolved boundaries
 

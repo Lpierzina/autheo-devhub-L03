@@ -1,6 +1,7 @@
 # DevHub L0 capacity-allocation contract
 
-Marketplace calls DevHub through the five `/v1/marketplace/*` endpoints using
+Marketplace calls DevHub through the four currently implemented
+`/v1/marketplace/*` endpoints using
 an HMAC key configured by the operator. DevHub treats Marketplace as a
 server-to-server client, never as a mesh peer or a source of provider
 recipients, node bindings, settlement configuration, or buyer transactions.
