@@ -30,6 +30,10 @@ is not a DevHub/Hive ingestion surface. The required, separately reviewed
 reference for those capabilities is
 [DevHub L0 operational contract](../integrations/devhub-l0-operational-contract.md).
 That contract is not yet implemented by this OpenAPI surface.
+[Marketplace consumer handoff](../integrations/marketplace-consumer-handoff.md)
+is the concise implementation guide for the separate Marketplace repository;
+it distinguishes the four available routes from the future operational
+contract.
 
 Do not add Swagger UI for Hive Admin. Static files are intentionally the only
 documentation delivery mechanism in this change.
