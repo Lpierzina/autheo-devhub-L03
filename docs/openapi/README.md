@@ -23,13 +23,13 @@ server-side route with a Clerk JWT minted from the
 Admin route and is intentionally absent from this private DevHub OpenAPI
 document.
 
-Marketplace allocation status/read APIs, callbacks, and DevHub/Hive usage
-ingestion are not current requirements. `POST /usage-records` is
-buyer-authenticated, not a DevHub/Hive ingestion surface. Any future need for
-allocation callbacks, usage ingestion, or node-verifier completion requires a
-separately reviewed Marketplace contract covering authentication, tenant
-binding, idempotency/replay, payload sanitization, error semantics, and
-operational ownership.
+The four routes in this OpenAPI file do not include capacity holds, allocation
+status/read APIs, callbacks, project/release handoff, execution evidence, or
+DevHub/Hive usage ingestion. `POST /usage-records` is buyer-authenticated and
+is not a DevHub/Hive ingestion surface. The required, separately reviewed
+reference for those capabilities is
+[DevHub L0 operational contract](../integrations/devhub-l0-operational-contract.md).
+That contract is not yet implemented by this OpenAPI surface.
 
 Do not add Swagger UI for Hive Admin. Static files are intentionally the only
 documentation delivery mechanism in this change.
