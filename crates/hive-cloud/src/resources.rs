@@ -3,7 +3,85 @@
 //! counters. Each node reports its capacity into `NodeInfo`; the cluster total is
 //! the sum across live nodes (see `admin::resources`).
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use hive_edge::GpuDeviceInfo;
 use sysinfo::{Disks, Networks, System};
+
+/// Sanitized CPU facts collected directly by the trusted node process.
+///
+/// `physical_cores` is optional because some virtualized hosts do not expose
+/// topology. It must never be derived from the schedulable thread count.
+#[derive(Clone, Debug)]
+pub struct CpuInventory {
+    pub model: Option<String>,
+    pub physical_cores: Option<u32>,
+    pub architecture: &'static str,
+}
+
+pub fn cpu_inventory() -> CpuInventory {
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        _ => "other",
+    };
+    let mut model = None;
+    let mut physical_cores = None;
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+            let blocks = cpuinfo.split("\n\n").collect::<Vec<_>>();
+            model = blocks.iter().find_map(|block| {
+                block
+                    .lines()
+                    .find_map(|line| line.split_once(':'))
+                    .filter(|(key, _)| {
+                        matches!(
+                            key.trim(),
+                            "model name" | "Hardware" | "Processor" | "cpu model"
+                        )
+                    })
+                    .and_then(|(_, value)| bounded_hardware_string(value))
+            });
+            let topology = blocks
+                .iter()
+                .filter_map(|block| {
+                    let mut package = None;
+                    let mut core = None;
+                    for line in block.lines() {
+                        let Some((key, value)) = line.split_once(':') else {
+                            continue;
+                        };
+                        match key.trim() {
+                            "physical id" => package = value.trim().parse::<u32>().ok(),
+                            "core id" => core = value.trim().parse::<u32>().ok(),
+                            _ => {}
+                        }
+                    }
+                    package.zip(core)
+                })
+                .collect::<BTreeSet<_>>();
+            physical_cores = (!topology.is_empty())
+                .then_some(topology.len() as u32)
+                .filter(|count| *count > 0);
+        }
+    }
+    CpuInventory {
+        model,
+        physical_cores,
+        architecture,
+    }
+}
+
+fn bounded_hardware_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= 160
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' '))
+    .then(|| value.to_owned())
+}
 
 /// Static capacity of this host: (cpu_cores, mem_total_mb, disk_total_gb).
 /// Read once at startup and published on the node's `NodeInfo`.
@@ -237,6 +315,56 @@ pub fn detect_gpus() -> (u32, Option<String>, u64) {
         }
     }
     (count, model, vram_mb)
+}
+
+/// Normalized GPU device inventory, grouped only when model and per-device
+/// memory match exactly. Environment aggregate overrides intentionally return
+/// no entries: they cannot authoritatively describe individual devices.
+pub fn detect_gpu_devices() -> Vec<GpuDeviceInfo> {
+    if std::env::var("HIVE_GPUS").is_ok() {
+        return Vec::new();
+    }
+    let out = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let mut grouped = BTreeMap::<(String, u64), u32>::new();
+    for line in String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut parts = line.rsplitn(2, ',');
+        let Some(vram_mib_each) = parts
+            .next()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+        else {
+            continue;
+        };
+        let Some(model) = parts.next().and_then(bounded_hardware_string) else {
+            continue;
+        };
+        let count = grouped.entry((model, vram_mib_each)).or_default();
+        *count = count.saturating_add(1);
+    }
+    grouped
+        .into_iter()
+        .filter_map(|((model, vram_mib_each), count)| {
+            (count > 0).then_some(GpuDeviceInfo {
+                vendor: "nvidia".into(),
+                model,
+                count,
+                vram_mib_each,
+            })
+        })
+        .collect()
 }
 
 /// Live usage snapshot of this host.

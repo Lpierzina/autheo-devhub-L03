@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DevHub Marketplace private API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     **PRIVATE_SERVICE_TO_SERVICE.** This is the Marketplace-to-DevHub integration
     implemented by `hive-cloud`. It is not a browser API and is not an L0 mesh
@@ -26,7 +26,18 @@ paths:
         Returns only healthy, connected, eligible Firecracker nodes or
         artifact-capable Litebox nodes with at least 1 GiB memory and either
         unknown disk telemetry or 20+ GiB free. Provider recipients come solely
-        from operator configuration. Results expire after 60 seconds.
+        from operator configuration. Results expire after 60 seconds. Every
+        response body binds the operator-derived `provider_id` to the
+        registry-derived `canonical_node_id`; Marketplace must reject a record
+        that does not match the relationship it requested.
+
+        `hardware` is an optional, sanitized DevHub-controlled inventory
+        projection. It intentionally never contains node addresses, hostnames,
+        device identifiers, paths, topology, raw probe output, or credentials.
+        Absent optional facts are unknown, not zero/default values. DevHub's
+        current storage telemetry is aggregate-only and its network telemetry
+        is transfer accounting, so this version does not publish typed storage
+        devices, usable storage, ECC, or an egress guarantee.
       responses:
         '200':
           description: Sanitized capacity advertisements
@@ -154,12 +165,69 @@ components:
         region: {type: string}
         runtime: {type: string}
         capabilities: {$ref: '#/components/schemas/Capacity'}
+        hardware: {$ref: '#/components/schemas/HardwareInventory'}
         availability: {$ref: '#/components/schemas/ResourceAdvertisement'}
         health: {type: string, const: healthy}
         issued_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
         revoked_at: {type: [string, 'null'], format: date-time}
         configuration_reference: {type: string, const: l0-config-v1}
+    HardwareInventory:
+      type: object
+      required: [cpu, memory]
+      description: |
+        A compatibility-additive, purpose-built hardware projection. It is
+        inventory only: `health` and `availability` remain the current
+        operational/sellability facts. Omitted fields are unavailable, not
+        inferred. Legacy `capabilities` fields remain supported.
+      properties:
+        cpu: {$ref: '#/components/schemas/HardwareCpu'}
+        memory: {$ref: '#/components/schemas/HardwareMemory'}
+        gpus:
+          type: array
+          maxItems: 1024
+          description: Present only when a trusted per-device probe succeeds; empty/absent means no normalized inventory is available.
+          items: {$ref: '#/components/schemas/GpuDevice'}
+        storage:
+          type: array
+          description: Not currently produced because DevHub has no authoritative typed-device inventory.
+          items: {$ref: '#/components/schemas/StorageDevice'}
+        network: {$ref: '#/components/schemas/HardwareNetwork'}
+    HardwareCpu:
+      type: object
+      properties:
+        model: {type: string, minLength: 1, maxLength: 160}
+        physical_cores: {type: integer, minimum: 1, maximum: 65536}
+        threads: {type: integer, minimum: 1, maximum: 65536}
+        architecture: {type: string, enum: [x86_64, aarch64, other]}
+    HardwareMemory:
+      type: object
+      properties:
+        total_mib: {type: integer, minimum: 1, maximum: 16777216}
+        ecc:
+          type: boolean
+          description: Not currently produced; omitted unless DevHub gains an authoritative ECC source.
+    GpuDevice:
+      type: object
+      required: [vendor, model, count, vram_mib_each]
+      properties:
+        vendor: {type: string, enum: [nvidia, amd, intel, other]}
+        model: {type: string, minLength: 1, maxLength: 160}
+        count: {type: integer, minimum: 1, maximum: 1024}
+        vram_mib_each: {type: integer, minimum: 1, maximum: 16777216}
+    StorageDevice:
+      type: object
+      description: Reserved for a future authoritative typed storage probe; not currently produced.
+      required: [type, capacity_gib]
+      properties:
+        type: {type: string, enum: [nvme_ssd, sata_ssd, hdd, other, unknown]}
+        capacity_gib: {type: integer, minimum: 1}
+        usable_gib: {type: integer, minimum: 0}
+    HardwareNetwork:
+      type: object
+      description: Not currently produced because DevHub does not measure or guarantee a safe minimum egress rate.
+      properties:
+        egress_mbps_min: {type: integer, minimum: 0, maximum: 100000000}
     DeploymentList:
       type: object
       required: [data]

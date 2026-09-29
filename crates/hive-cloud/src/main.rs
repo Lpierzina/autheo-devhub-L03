@@ -718,9 +718,11 @@ async fn async_main() -> anyhow::Result<()> {
         }
     };
     let cap = resources::capacity();
+    let cpu = resources::cpu_inventory();
     // GPU probe (nvidia-smi, once at boot; HIVE_GPUS override) — advertised in
     // gossip so placement can target GPU hosts for gpu-requesting functions.
     let gpus = resources::detect_gpus();
+    let gpu_devices = resources::detect_gpu_devices();
     // Observe all three runtime capabilities from the backend that was actually
     // selected above. Firecracker reuses its provision-time exact-rootfs proof;
     // Litebox answers only after its selected instance remains supported (and
@@ -1016,6 +1018,9 @@ async fn async_main() -> anyhow::Result<()> {
         city: geo.as_ref().map(|g| g.2.clone()),
         country: geo.as_ref().map(|g| g.3.clone()),
         cpu_cores: cap.0,
+        cpu_model: cpu.model,
+        cpu_physical_cores: cpu.physical_cores,
+        cpu_architecture: Some(cpu.architecture.into()),
         mem_total_mb: cap.1,
         disk_total_gb: cap.2,
         // Seeded here so the very first gossip round already carries a real
@@ -1044,6 +1049,7 @@ async fn async_main() -> anyhow::Result<()> {
         artifact_transfer_protocol: None,
         gpu_model: gpus.1.clone(),
         gpu_vram_mb: gpus.2,
+        gpu_devices,
         provider: std::env::var("HIVE_CLOUD_PROVIDER")
             .ok()
             .map(|v| v.trim().to_lowercase())

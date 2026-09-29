@@ -7,19 +7,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    Router,
     body::{Body, Bytes},
     extract::State,
     http::HeaderMap,
     middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
+    Router,
 };
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 use tower::ServiceExt;
@@ -50,6 +50,11 @@ const SETTLEMENT_V2: u8 = 2;
 const SETTLEMENT_V1: u8 = 1;
 const SETTLEMENT_ACTIVE: &str = "active";
 const SETTLEMENT_HISTORICAL: &str = "historical";
+const MAX_HARDWARE_MODEL_LEN: usize = 160;
+const MAX_CPU_THREADS: u32 = 65_536;
+const MAX_MEMORY_MIB: u64 = 16 * 1024 * 1024;
+const MAX_GPU_COUNT: u32 = 1_024;
+const MAX_GPU_VRAM_MIB: u64 = 16 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct ApiError {
@@ -178,6 +183,8 @@ struct ListedDeployment {
     region: String,
     runtime: String,
     capabilities: Capabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hardware: Option<MarketplaceHardware>,
     expires_at_ms: u64,
 }
 
@@ -215,6 +222,8 @@ struct MarketplaceDeployment {
     capabilities: MarketplaceCapabilities,
     availability: MarketplaceAvailability,
     health: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hardware: Option<MarketplaceHardware>,
     issued_at: String,
     expires_at: String,
     revoked_at: Option<String>,
@@ -226,6 +235,43 @@ struct MarketplaceCapabilities {
     vcpu: u32,
     ram_mib: u64,
     storage_gib: u64,
+}
+
+/// Purpose-specific, Marketplace-safe hardware projection. Never serialize a
+/// registry node directly: registry nodes contain peer addresses, URLs, labels,
+/// and other topology that do not belong at this boundary.
+#[derive(Clone, Serialize, Deserialize)]
+struct MarketplaceHardware {
+    cpu: MarketplaceCpu,
+    memory: MarketplaceMemory,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    gpus: Vec<MarketplaceGpu>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct MarketplaceCpu {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    physical_cores: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    threads: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    architecture: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct MarketplaceMemory {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_mib: Option<u64>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct MarketplaceGpu {
+    vendor: String,
+    model: String,
+    count: u32,
+    vram_mib_each: u64,
 }
 
 #[derive(Serialize)]
@@ -248,6 +294,7 @@ impl MarketplaceDeployment {
                 ram_mib: entry.capabilities.ram_mib,
                 storage_gib: entry.capabilities.storage_gib,
             },
+            hardware: entry.hardware,
             availability: MarketplaceAvailability {
                 available: true,
                 capacity_units: 1,
@@ -878,10 +925,75 @@ fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
                     },
                     storage_gib: node.disk_total_gb,
                 },
+                hardware: marketplace_hardware(&node),
                 expires_at_ms,
             })
         })
         .collect()
+}
+
+fn marketplace_hardware(node: &hive_edge::NodeInfo) -> Option<MarketplaceHardware> {
+    let threads = bounded_positive_u32(node.cpu_cores, MAX_CPU_THREADS);
+    let physical_cores = node
+        .cpu_physical_cores
+        .filter(|count| *count > 0 && *count <= MAX_CPU_THREADS)
+        .filter(|count| threads.is_none_or(|threads| *count <= threads));
+    let model = node.cpu_model.as_deref().and_then(safe_hardware_model);
+    let architecture = node
+        .cpu_architecture
+        .as_deref()
+        .filter(|value| matches!(*value, "x86_64" | "aarch64" | "other"))
+        .map(ToOwned::to_owned);
+    let total_mib = bounded_positive_u64(node.mem_total_mb, MAX_MEMORY_MIB);
+    let gpus = node
+        .gpu_devices
+        .iter()
+        .filter_map(|gpu| {
+            let vendor = matches!(gpu.vendor.as_str(), "nvidia" | "amd" | "intel" | "other")
+                .then(|| gpu.vendor.clone())?;
+            let model = safe_hardware_model(&gpu.model)?;
+            let count = bounded_positive_u32(gpu.count, MAX_GPU_COUNT)?;
+            let vram_mib_each = bounded_positive_u64(gpu.vram_mib_each, MAX_GPU_VRAM_MIB)?;
+            Some(MarketplaceGpu {
+                vendor,
+                model,
+                count,
+                vram_mib_each,
+            })
+        })
+        .collect();
+    // Storage type/device inventory and egress minimums are deliberately
+    // absent: current DevHub telemetry only has a largest-volume aggregate and
+    // transfer counters, neither of which authoritatively supplies those facts.
+    (threads.is_some() || physical_cores.is_some() || model.is_some() || total_mib.is_some())
+        .then_some(MarketplaceHardware {
+            cpu: MarketplaceCpu {
+                model,
+                physical_cores,
+                threads,
+                architecture,
+            },
+            memory: MarketplaceMemory { total_mib },
+            gpus,
+        })
+}
+
+fn safe_hardware_model(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= MAX_HARDWARE_MODEL_LEN
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' '))
+    .then(|| value.to_owned())
+}
+
+fn bounded_positive_u32(value: u32, max: u32) -> Option<u32> {
+    (value > 0 && value <= max).then_some(value)
+}
+
+fn bounded_positive_u64(value: u64, max: u64) -> Option<u64> {
+    (value > 0 && value <= max).then_some(value)
 }
 
 async fn list_deployments(
