@@ -16,6 +16,12 @@ Marketplace calls DevHub through exactly four private service-to-service routes:
 * `POST /v1/marketplace/payments/verify`
 * `POST /v1/marketplace/l0/allocations`
 
+The deployment advertisement route includes the compatibility-preserving
+optional `hardware` projection for trusted, sanitized node inventory. Its
+schema, bounds, omitted-field policy, identity binding, and 60-second
+freshness behavior are defined in `devhub-marketplace-private.yaml`; it does
+not add a route or alter the private exposure boundary.
+
 DevHub calls Marketplace only for
 `GET /v1/marketplace/orders/{marketplace_order_id}/placement-policy`, from its
 server-side route with a Clerk JWT minted from the

@@ -9,6 +9,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// A normalized GPU device group collected by the trusted node process.
+///
+/// This deliberately contains no device identifier, PCI location, driver
+/// version, or agent diagnostic data, so it can be projected safely into
+/// Marketplace hardware facts.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GpuDeviceInfo {
+    pub vendor: String,
+    pub model: String,
+    pub count: u32,
+    pub vram_mib_each: u64,
+}
+
 /// A node in the cloud (this machine or a peer MacBook).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeInfo {
@@ -134,6 +147,18 @@ pub struct NodeInfo {
     /// Static host capacity (for real cluster resource totals = sum over nodes).
     #[serde(default)]
     pub cpu_cores: u32,
+    /// Sanitized CPU brand/model as reported by the local host probe. `None`
+    /// means the platform did not obtain an authoritative model string.
+    #[serde(default)]
+    pub cpu_model: Option<String>,
+    /// Physical-core count reported by the local topology probe. This is
+    /// intentionally separate from `cpu_cores`, which is the schedulable
+    /// thread/vCPU count. `None` is never inferred from the latter.
+    #[serde(default)]
+    pub cpu_physical_cores: Option<u32>,
+    /// Normalized process architecture (`x86_64`, `aarch64`, or `other`).
+    #[serde(default)]
+    pub cpu_architecture: Option<String>,
     #[serde(default)]
     pub mem_total_mb: u64,
     #[serde(default)]
@@ -257,6 +282,11 @@ pub struct NodeInfo {
     /// Total VRAM across all GPUs on the host, MiB.
     #[serde(default)]
     pub gpu_vram_mb: u64,
+    /// Formal GPU device inventory from a trusted local probe. An empty list
+    /// means no per-device inventory is available; callers must not synthesize
+    /// entries from the legacy aggregate GPU fields.
+    #[serde(default)]
+    pub gpu_devices: Vec<GpuDeviceInfo>,
     /// Epoch-ms this node's PROCESS started (not the host's boot time).
     ///
     /// The cheapest possible fleet-visible "is that node cycling?" signal: a
@@ -1111,6 +1141,7 @@ mod tests {
             artifact_transfer_protocol: None,
             gpu_model: None,
             gpu_vram_mb: 0,
+            gpu_devices: Vec::new(),
             id: id.into(),
             name: id.into(),
             region: region.into(),
@@ -1135,6 +1166,9 @@ mod tests {
             city: None,
             country: None,
             cpu_cores: 0,
+            cpu_model: None,
+            cpu_physical_cores: None,
+            cpu_architecture: None,
             mem_total_mb: 0,
             disk_total_gb: 0,
             disk_free_gb: 0,

@@ -67,3 +67,48 @@ Immediately before scheduling, DevHub derives the listing anew from its live
 registry and rejects expired, revoked/unhealthy, capacity-exhausted, or
 provider/node-mismatched placements. The scheduler receives a one-node
 allowlist; it never substitutes another node.
+
+## Hardware inventory projection
+
+`GET /v1/marketplace/l0/deployments` may include a compatibility-additive
+`hardware` object alongside the legacy `capabilities` object. `capabilities`
+remains the compatibility contract (`vcpu`, `ram_mib`, and `storage_gib`);
+Marketplace must not change its interpretation or units. `hardware` is the
+forward-looking structured inventory representation.
+
+Every advertisement body binds its `canonical_node_id` (the DevHub registry
+identity) and `provider_id` (from the operator-owned provider registry).
+Marketplace must verify both values against the listing it is processing.
+DevHub only emits advertisements for the provider/node relationship it derives
+itself. A URL or requested identifier is never evidence of that relationship.
+
+The response is trustworthy through the private mTLS gateway plus the
+five-header HMAC authorization described above. DevHub does not add an
+independent response signature. Inventory comes from the DevHub-controlled
+node process and authenticated Hive registry, not Marketplace/provider input.
+The listing's `issued_at` and `expires_at` are UTC RFC3339 timestamps; its
+60-second expiry is a hard sellability bound. Marketplace must treat an
+expired record as unavailable and must use `health` and `availability`
+separately from hardware facts.
+
+The currently producible fields are:
+
+* `hardware.cpu.model`, `physical_cores`, `threads`, and `architecture` when
+  the local trusted probe can observe them. Physical cores are omitted rather
+  than inferred from threads/vCPU.
+* `hardware.memory.total_mib`, when within DevHub's accepted bound.
+* `hardware.gpus[]` only when the local NVIDIA device probe has an unambiguous
+  model and per-device VRAM. Devices are grouped only by identical model and
+  per-device VRAM; aggregate legacy GPU fields are never expanded into
+  fabricated devices.
+
+The following desired fields are not currently authoritative and are omitted:
+memory ECC; typed storage devices, capacity, and usable capacity; minimum
+egress bandwidth; and non-NVIDIA GPU device inventory. `storage_gib` remains
+the legacy largest-volume capacity field, not a typed storage inventory.
+
+DevHub validates models as bounded printable strings, CPU thread/core counts,
+memory, GPU counts, and VRAM against finite bounds before exposing them.
+The projection has no IPs, hostnames, ports, routes, peer identities, device
+serials, filesystem paths, internal labels, service URLs, agent payloads,
+diagnostics, credentials, certificates, or keys.

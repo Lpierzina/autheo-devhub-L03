@@ -860,6 +860,7 @@ mod tests {
             artifact_transfer_protocol: None,
             gpu_model: None,
             gpu_vram_mb: 0,
+            gpu_devices: Vec::new(),
             id: name.into(),
             name: name.into(),
             region: region.into(),
@@ -884,6 +885,9 @@ mod tests {
             city: None,
             country: None,
             cpu_cores: 4,
+            cpu_model: None,
+            cpu_physical_cores: None,
+            cpu_architecture: None,
             mem_total_mb: mem,
             disk_total_gb: 50,
             // Non-zero so these fixtures are ABOVE `disk_floor_gb()` and stay
