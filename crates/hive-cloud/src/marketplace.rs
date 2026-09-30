@@ -25,7 +25,7 @@ use sha3::Keccak256;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use crate::{schedule, state::CloudState};
+use crate::{marketplace_releases::MarketplaceLifecycleEvent, schedule, state::CloudState};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -422,14 +422,12 @@ impl AllocationStore {
     pub fn load(&self, rows: Vec<Allocation>) {
         let mut state = self.0.write();
         state.clear();
-        state.extend(
-            rows.into_iter().map(|mut row| {
-                if row.allocation_id.is_empty() {
-                    row.allocation_id = format!("alloc_{}", row.marketplace_order_id);
-                }
-                (row.allocation_id.clone(), row)
-            }),
-        );
+        state.extend(rows.into_iter().map(|mut row| {
+            if row.allocation_id.is_empty() {
+                row.allocation_id = format!("alloc_{}", row.marketplace_order_id);
+            }
+            (row.allocation_id.clone(), row)
+        }));
     }
     pub(crate) fn get(&self, id: &str) -> Option<Allocation> {
         self.0.read().get(id).cloned()
@@ -437,6 +435,15 @@ impl AllocationStore {
     fn put_if_absent(&self, allocation: Allocation) -> Result<Allocation, Allocation> {
         let mut state = self.0.write();
         if let Some(old) = state.get(&allocation.allocation_id) {
+            return Err(old.clone());
+        }
+        // Settlement/order binding is consumed only once. A caller that loses
+        // its result must reuse its idempotency key, never create a second
+        // entitlement for the same paid order with a fresh key.
+        if let Some(old) = state
+            .values()
+            .find(|old| old.marketplace_order_id == allocation.marketplace_order_id)
+        {
             return Err(old.clone());
         }
         state.insert(allocation.allocation_id.clone(), allocation.clone());
@@ -1487,9 +1494,7 @@ async fn submit_allocation(
     let key = idempotency_key(&headers)?;
     if let Some(id) = cloud.marketplace_security.allocation_for_key(&key) {
         if let Some(allocation) = cloud.marketplace_allocations.get(&id) {
-            return Ok(Json(
-                allocation_receipt(&allocation),
-            ));
+            return Ok(Json(allocation_receipt(&allocation)));
         }
         return Err(error(
             axum::http::StatusCode::CONFLICT,
@@ -1600,7 +1605,12 @@ async fn submit_allocation(
         let release = cloud
             .marketplace_releases
             .release(&workload.release_id)
-            .ok_or_else(|| error(axum::http::StatusCode::CONFLICT, "marketplace_release_unavailable"))?;
+            .ok_or_else(|| {
+                error(
+                    axum::http::StatusCode::CONFLICT,
+                    "marketplace_release_unavailable",
+                )
+            })?;
         if !release.published
             || release.revoked
             || release.project_id != workload.project_id
@@ -1623,7 +1633,10 @@ async fn submit_allocation(
                 marketplace.buyer_tenant_id.clone(),
             )
             .map_err(|code| error(axum::http::StatusCode::CONFLICT, code))?;
-        (Some(marketplace.workload_order_id.clone()), Some(handoff_id))
+        (
+            Some(marketplace.workload_order_id.clone()),
+            Some(handoff_id),
+        )
     } else {
         (None, None)
     };
@@ -1653,20 +1666,105 @@ async fn submit_allocation(
     let allocation = match cloud.marketplace_allocations.put_if_absent(allocation) {
         Ok(row) => row,
         Err(old) => {
-            return Ok(Json(
-                allocation_receipt(&old),
-            ));
+            return Ok(Json(allocation_receipt(&old)));
         }
     };
     cloud
         .marketplace_security
         .bind_allocation_key(key, allocation.allocation_id.clone());
+    if let Some(workload_order_id) = allocation.workload_order_id.clone() {
+        cloud
+            .marketplace_releases
+            .queue_lifecycle_event(MarketplaceLifecycleEvent {
+                event_id: format!("evt_{}", Uuid::new_v4().simple()),
+                event_version: 1,
+                workload_order_id,
+                buyer_tenant_id: allocation.tenant_id.clone(),
+                allocation_id: allocation.allocation_id.clone(),
+                lifecycle_status: allocation.status.clone(),
+                occurred_at: iso_millis_timestamp(now),
+                reason_code: "allocation_accepted".into(),
+                delivered: false,
+            });
+    }
     crate::persist::persist(&cloud);
     // HMAC routes authorize settlement and capacity only.  They must never
     // accept repository/image/build settings from Marketplace.  A separately
     // authenticated DevHub route attaches a durable, immutable project release
     // after exact buyer/project/revision validation.
     Ok(Json(allocation_receipt(&allocation)))
+}
+
+/// Deliver Marketplace lifecycle evidence without making an allocation request
+/// wait on an external callback. Delivery is opt-in through operator-owned
+/// configuration; an unset callback leaves events durable and pending rather
+/// than inventing a polling-based state transition.
+pub fn spawn_lifecycle_delivery(cloud: Arc<CloudState>) {
+    tokio::spawn(async move {
+        loop {
+            for event in cloud.marketplace_releases.pending_lifecycle_events() {
+                if deliver_lifecycle_event(&cloud, &event).await {
+                    cloud
+                        .marketplace_releases
+                        .mark_lifecycle_delivered(&event.event_id);
+                    crate::persist::persist(&cloud);
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+}
+
+async fn deliver_lifecycle_event(cloud: &CloudState, event: &MarketplaceLifecycleEvent) -> bool {
+    let Ok(url) = std::env::var("HIVE_MARKETPLACE_EVENT_URL") else {
+        return false;
+    };
+    let Ok(parsed) = reqwest::Url::parse(&url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" || parsed.host_str().is_none() {
+        return false;
+    }
+    let Ok(key_id) = std::env::var("HIVE_MARKETPLACE_EVENT_KEY_ID") else {
+        return false;
+    };
+    let Some(secret) = hmac_secret(&key_id) else {
+        return false;
+    };
+    let Ok(body) = serde_json::to_vec(&json!({
+        "event_id": event.event_id,
+        "event_version": event.event_version,
+        "workload_order_id": event.workload_order_id,
+        "buyer_tenant_id": event.buyer_tenant_id,
+        "allocation_id": event.allocation_id,
+        "lifecycle_status": event.lifecycle_status,
+        "occurred_at": event.occurred_at,
+        "reason_code": event.reason_code,
+    })) else {
+        return false;
+    };
+    let timestamp = hive_core::now_ms();
+    let nonce = Uuid::new_v4().simple().to_string();
+    let path = parsed.path();
+    let digest = hex::encode(Sha256::digest(&body));
+    let canonical = format!("POST\n{path}\n{timestamp}\n{nonce}\n{digest}");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC supports all key sizes");
+    mac.update(canonical.as_bytes());
+    let signature = hex::encode(mac.finalize().into_bytes());
+    cloud
+        .http
+        .post(url)
+        .header("content-type", "application/json")
+        .header("x-marketplace-key-id", key_id)
+        .header("x-marketplace-timestamp", timestamp)
+        .header("x-marketplace-nonce", nonce)
+        .header("x-marketplace-content-sha256", digest)
+        .header("x-marketplace-signature", signature)
+        .body(body)
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
 }
 
 /// Marketplace receives an opaque acknowledgement only. In particular, never

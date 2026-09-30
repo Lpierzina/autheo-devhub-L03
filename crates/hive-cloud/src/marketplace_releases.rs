@@ -43,6 +43,10 @@ pub struct MarketplaceReleaseSnapshot {
     /// here; it remains inside the managed database store.
     #[serde(default)]
     pub managed_postgres: BTreeMap<String, String>,
+    /// Durable, retryable Marketplace lifecycle outbox. The payload is a
+    /// deliberately safe projection and never contains deployment details.
+    #[serde(default)]
+    pub lifecycle_events: Vec<MarketplaceLifecycleEvent>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,6 +94,20 @@ pub struct MarketplaceWorkload {
     #[serde(default)]
     pub credential_id: Option<String>,
     pub created_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MarketplaceLifecycleEvent {
+    pub event_id: String,
+    pub event_version: u8,
+    pub workload_order_id: String,
+    pub buyer_tenant_id: String,
+    pub allocation_id: String,
+    pub lifecycle_status: String,
+    pub occurred_at: String,
+    pub reason_code: String,
+    #[serde(default)]
+    pub delivered: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,6 +225,7 @@ impl MarketplaceReleaseStore {
                 && existing.release_id == workload.release_id
                 && existing.revision == workload.revision
                 && existing.buyer_tenant == workload.buyer_tenant
+                && existing.workload_handoff_id == workload.workload_handoff_id
                 && existing.client_certificate_delivery_requested
                     == workload.client_certificate_delivery_requested
                 && existing.credential_id == workload.credential_id
@@ -254,6 +273,48 @@ impl MarketplaceReleaseStore {
             .rev()
             .find(|workload| workload.project_id == project)
             .cloned()
+    }
+
+    /// Queue an immutable lifecycle event exactly once. Delivery retries retain
+    /// the same event id and byte-for-byte payload; Marketplace deduplicates by
+    /// that id rather than interpreting transport retries as new state.
+    pub(crate) fn queue_lifecycle_event(
+        &self,
+        event: MarketplaceLifecycleEvent,
+    ) -> MarketplaceLifecycleEvent {
+        let mut state = self.0.write();
+        if let Some(existing) = state
+            .lifecycle_events
+            .iter()
+            .find(|existing| existing.event_id == event.event_id)
+        {
+            return existing.clone();
+        }
+        state.lifecycle_events.push(event.clone());
+        event
+    }
+
+    pub(crate) fn pending_lifecycle_events(&self) -> Vec<MarketplaceLifecycleEvent> {
+        self.0
+            .read()
+            .lifecycle_events
+            .iter()
+            .filter(|event| !event.delivered)
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn mark_lifecycle_delivered(&self, event_id: &str) -> bool {
+        let mut state = self.0.write();
+        let Some(event) = state
+            .lifecycle_events
+            .iter_mut()
+            .find(|event| event.event_id == event_id)
+        else {
+            return false;
+        };
+        event.delivered = true;
+        true
     }
 
     /// Resolves only an exact immutable binding.  Project identity is never a
@@ -565,10 +626,6 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
         .route(
             "/v1/projects/:project/marketplace-releases",
             post(create_release),
-        )
-        .route(
-            "/v1/projects/:project/marketplace-workloads",
-            post(attach_workload),
         )
         .with_state(cloud)
 }

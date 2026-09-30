@@ -1560,6 +1560,7 @@ async fn async_main() -> anyhow::Result<()> {
     // gossip and the destination node performs Marketplace HMAC verification.
     marketplace_gateway::spawn(cloud.clone());
     marketplace_releases::spawn_credential_rotation(cloud.clone());
+    marketplace::spawn_lifecycle_delivery(cloud.clone());
 
     // Initial owner resolution (single-node: this node is owner) + seed the
     // gossiped fencing epoch.

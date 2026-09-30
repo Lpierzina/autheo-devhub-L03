@@ -320,3 +320,17 @@ components:
         allocation_id: {type: string, description: Opaque DevHub-issued receipt}
         workload_handoff_id: {type: [string, 'null'], description: Opaque receipt present only for an accepted workload binding}
         status: {type: string, enum: [submitted, scheduled, failed]}
+    WorkloadLifecycleEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, event_version, workload_order_id, buyer_tenant_id, allocation_id, lifecycle_status, occurred_at, reason_code]
+      description: Retries retain an immutable event_id and body. The callback uses the same POST HMAC canonicalization, timestamp window, and nonce protection as Marketplace requests.
+      properties:
+        event_id: {type: string}
+        event_version: {type: integer, const: 1}
+        workload_order_id: {type: string}
+        buyer_tenant_id: {type: string}
+        allocation_id: {type: string}
+        lifecycle_status: {type: string, enum: [scheduled, provisioning, active, completed, failed, revoked]}
+        occurred_at: {type: string, format: date-time}
+        reason_code: {type: string}
