@@ -74,6 +74,10 @@ impl WorkloadClientCertificateCapability {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MarketplaceWorkload {
+    /// Opaque DevHub handoff receipt. It is intentionally unrelated to a
+    /// deployment id, endpoint, provider, or credential selector.
+    #[serde(default)]
+    pub workload_handoff_id: String,
     pub allocation_id: String,
     pub project_id: String,
     pub release_id: String,
@@ -214,6 +218,32 @@ impl MarketplaceReleaseStore {
         }
         state.workloads.push(workload.clone());
         Ok(workload)
+    }
+
+    /// Attach a workload only after the Marketplace allocation boundary has
+    /// verified its payment, tenant, project, and immutable release binding.
+    /// This keeps browser-authenticated project routes out of the commercial
+    /// handoff path entirely.
+    pub(crate) fn attach_from_marketplace(
+        &self,
+        workload_handoff_id: String,
+        allocation_id: String,
+        project_id: String,
+        release_id: String,
+        revision: String,
+        buyer_tenant: String,
+    ) -> Result<MarketplaceWorkload, &'static str> {
+        self.attach(MarketplaceWorkload {
+            workload_handoff_id,
+            allocation_id,
+            project_id,
+            release_id,
+            revision,
+            buyer_tenant,
+            client_certificate_delivery_requested: false,
+            credential_id: None,
+            created_ms: hive_core::now_ms(),
+        })
     }
 
     pub fn workload_for_project(&self, project: &str) -> Option<MarketplaceWorkload> {
@@ -679,6 +709,7 @@ async fn attach_workload(
     let workload = cloud
         .marketplace_releases
         .attach(MarketplaceWorkload {
+            workload_handoff_id: format!("wh_{}", Uuid::new_v4().simple()),
             allocation_id: request.allocation_id.clone(),
             project_id: project.clone(),
             release_id: release.release_id,
