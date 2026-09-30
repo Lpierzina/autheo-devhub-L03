@@ -1533,6 +1533,16 @@ async fn submit_allocation(
             ))
         }
     };
+    // Marketplace may advance an order only from DevHub lifecycle evidence.
+    // Refuse a workload handoff when its signed-delivery channel is not
+    // operator-configured; accepting one and silently requiring Marketplace
+    // polling would weaken that authority boundary.
+    if workload.is_some() && !lifecycle_event_delivery_configured() {
+        return Err(error(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "marketplace_lifecycle_delivery_unavailable",
+        ));
+    }
     let intent = cloud
         .marketplace_security
         .intent(&request.payment_intent_id)
@@ -1765,6 +1775,23 @@ async fn deliver_lifecycle_event(cloud: &CloudState, event: &MarketplaceLifecycl
         .send()
         .await
         .is_ok_and(|response| response.status().is_success())
+}
+
+fn lifecycle_event_delivery_configured() -> bool {
+    let Ok(url) = std::env::var("HIVE_MARKETPLACE_EVENT_URL") else {
+        return false;
+    };
+    let Ok(parsed) = reqwest::Url::parse(&url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" || parsed.host_str().is_none() {
+        return false;
+    }
+    std::env::var("HIVE_MARKETPLACE_EVENT_KEY_ID")
+        .ok()
+        .filter(|key_id| !key_id.is_empty())
+        .and_then(|key_id| hmac_secret(&key_id))
+        .is_some()
 }
 
 /// Marketplace receives an opaque acknowledgement only. In particular, never
