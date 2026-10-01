@@ -153,6 +153,17 @@ attachment proofs to pass before restoring the capability. Do not manually
 flush unrelated nftables state or broaden BuildExecutor networking. Ordinary
 BuildExecutor jobs remain `--network=none` throughout.
 
+## Marketplace workload execution boundary
+
+The authoritative release-artifact, runtime, workload, storage-capability,
+and continuity contract is
+[`marketplace-workload-execution-boundary.md`](marketplace-workload-execution-boundary.md).
+It deliberately distinguishes existing provenance and node-local deployment
+artifacts from a future immutable executable-artifact catalog and persistent
+Minecraft-world storage implementation. Until those systems exist, Marketplace
+workload requests fail closed rather than claiming materialization,
+state continuity, warm standby, or failover support.
+
 Settlement stays `settlement_unavailable` until the selected
 `autheo-testnet-v1` profile verifies all of:
 

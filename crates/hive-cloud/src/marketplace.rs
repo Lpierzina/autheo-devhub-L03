@@ -1013,7 +1013,7 @@ fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
                     vcpu: node.cpu_cores,
                     ram_mib: node.mem_total_mb,
                     gpu: Gpu {
-                        model: node.gpu_model,
+                        model: node.gpu_model.clone(),
                         count: node.gpu_count,
                     },
                     storage_gib: node.disk_total_gb,
