@@ -5,7 +5,7 @@
 //! also carries a manifest, hidden candidate, and commit authority.
 
 use std::{
-    io::{Read, Write},
+    io::Write,
     os::unix::fs::FileExt,
     sync::Arc,
 };
@@ -133,7 +133,7 @@ fn locally_verified(store: &std::path::Path, artifact: &DevHubRuntimeArtifact) -
 }
 
 fn record(
-    cloud: &CloudState,
+    cloud: &Arc<CloudState>,
     artifact: &DevHubRuntimeArtifact,
     source_node: &str,
     result: &str,
