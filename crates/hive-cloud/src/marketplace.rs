@@ -7,25 +7,29 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::State,
     http::HeaderMap,
     middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
-    Router,
 };
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use crate::{marketplace_releases::MarketplaceLifecycleEvent, schedule, state::CloudState};
+use crate::{
+    marketplace_releases::{DevHubWorkloadInstance, MarketplaceLifecycleEvent},
+    schedule,
+    state::CloudState,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -55,6 +59,9 @@ const MAX_CPU_THREADS: u32 = 65_536;
 const MAX_MEMORY_MIB: u64 = 16 * 1024 * 1024;
 const MAX_GPU_COUNT: u32 = 1_024;
 const MAX_GPU_VRAM_MIB: u64 = 16 * 1024 * 1024;
+const MAX_WORKLOAD_VCPU: u32 = 65_536;
+const MAX_WORKLOAD_MEMORY_MIB: u64 = 16 * 1024 * 1024;
+const MAX_WORKLOAD_STORAGE_GIB: u64 = 16 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct ApiError {
@@ -495,6 +502,47 @@ struct MarketplaceWorkloadReference {
     revision: String,
 }
 
+/// The Marketplace-to-DevHub execution request. This contains commercial
+/// intent only. `deny_unknown_fields` is load-bearing: it rejects a provider,
+/// node, URL, image tag, manifest, secret, or storage implementation rather
+/// than silently accepting a field which a future implementation might use.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadIntentRequest {
+    workload_order_id: String,
+    buyer_tenant_id: String,
+    idempotency_key: String,
+    project_id: String,
+    release_id: String,
+    revision: String,
+    term: CommercialTerm,
+    capacity_requirements: WorkloadCapacityRequirements,
+    continuity_policy: WorkloadContinuityPolicy,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommercialTerm {
+    starts_at: String,
+    ends_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadCapacityRequirements {
+    vcpu: u32,
+    memory_mib: u64,
+    storage_gib: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadContinuityPolicy {
+    mode: String,
+    recovery_point_objective_seconds: u64,
+    recovery_time_objective_seconds: u64,
+}
+
 /// All Marketplace service routes live beneath this router-level HMAC gate.
 /// Keeping the gate here makes adding a route to `/v1/marketplace/*` through
 /// this module safe by default: handlers receive the original raw bytes only
@@ -508,6 +556,7 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
         )
         .route("/v1/marketplace/payments/verify", post(verify_payment))
         .route("/v1/marketplace/l0/allocations", post(submit_allocation))
+        .route("/v1/marketplace/workloads", post(submit_workload_intent))
         .route_layer(axum::middleware::from_fn_with_state(
             cloud.clone(),
             verify_marketplace_hmac,
@@ -1530,7 +1579,7 @@ async fn submit_allocation(
             return Err(error(
                 axum::http::StatusCode::BAD_REQUEST,
                 "invalid_workload_binding",
-            ))
+            ));
         }
     };
     // Marketplace may advance an order only from DevHub lifecycle evidence.
@@ -1703,6 +1752,132 @@ async fn submit_allocation(
     // authenticated DevHub route attaches a durable, immutable project release
     // after exact buyer/project/revision validation.
     Ok(Json(allocation_receipt(&allocation)))
+}
+
+/// Accept durable commercial workload intent only after DevHub resolves the
+/// exact immutable executable binding. This endpoint intentionally does not
+/// schedule, allocate storage, start a server, or promote a standby: those
+/// capabilities require artifact storage, persistent state, replication, and
+/// fencing that are not available in the current execution plane.
+async fn submit_workload_intent(
+    State(cloud): State<Arc<CloudState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Value> {
+    let header_key = idempotency_key(&headers)?;
+    let request: WorkloadIntentRequest = serde_json::from_slice(&body).map_err(|_| {
+        error(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_workload_intent",
+        )
+    })?;
+    if request.idempotency_key != header_key
+        || !valid_workload_identifier(&request.workload_order_id)
+        || !valid_workload_identifier(&request.buyer_tenant_id)
+        || !valid_workload_identifier(&request.project_id)
+        || !valid_workload_identifier(&request.release_id)
+        || !valid_workload_identifier(&request.revision)
+        || !valid_term(&request.term)
+        || request.capacity_requirements.vcpu == 0
+        || request.capacity_requirements.vcpu > MAX_WORKLOAD_VCPU
+        || request.capacity_requirements.memory_mib == 0
+        || request.capacity_requirements.memory_mib > MAX_WORKLOAD_MEMORY_MIB
+        || request.capacity_requirements.storage_gib == 0
+        || request.capacity_requirements.storage_gib > MAX_WORKLOAD_STORAGE_GIB
+    {
+        return Err(error(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_workload_intent",
+        ));
+    }
+    if request.continuity_policy.mode != "none" {
+        // No persistent volume, snapshot/restore, replication, reservation, or
+        // fencing authority exists yet. Accepting even warm standby would
+        // falsely promise state continuity; automatic failover is prohibited.
+        return Err(error(
+            axum::http::StatusCode::CONFLICT,
+            "workload_continuity_unsupported",
+        ));
+    }
+    if cloud.projects.team_of(&request.project_id) != request.buyer_tenant_id {
+        return Err(error(
+            axum::http::StatusCode::FORBIDDEN,
+            "marketplace_buyer_mismatch",
+        ));
+    }
+    let binding = cloud
+        .marketplace_releases
+        .executable_binding(&request.project_id, &request.release_id, &request.revision)
+        .ok_or_else(|| {
+            error(
+                axum::http::StatusCode::CONFLICT,
+                "release_executable_artifact_unavailable",
+            )
+        })?;
+    let instance = cloud
+        .marketplace_releases
+        .accept_workload_instance(DevHubWorkloadInstance {
+            workload_instance_id: format!("wi_{}", Uuid::new_v4().simple()),
+            workload_order_id: request.workload_order_id.clone(),
+            buyer_tenant_id: request.buyer_tenant_id.clone(),
+            marketplace_idempotency_key: request.idempotency_key,
+            term_starts_at: request.term.starts_at,
+            term_ends_at: request.term.ends_at,
+            requested_vcpu: request.capacity_requirements.vcpu,
+            requested_memory_mib: request.capacity_requirements.memory_mib,
+            requested_storage_gib: request.capacity_requirements.storage_gib,
+            project_id: request.project_id,
+            release_id: request.release_id,
+            revision: request.revision,
+            artifact_digest: binding.artifact.digest,
+            runtime_spec_digest: binding.runtime_spec_digest,
+            lifecycle_state: String::new(),
+            current_primary_allocation: None,
+            persistent_storage_id: None,
+            continuity_policy: request.continuity_policy.mode,
+            created_ms: hive_core::now_ms(),
+        })
+        .map_err(|code| error(axum::http::StatusCode::CONFLICT, code))?;
+    cloud
+        .marketplace_releases
+        .queue_lifecycle_event(MarketplaceLifecycleEvent {
+            event_id: format!("evt_{}", Uuid::new_v4().simple()),
+            event_version: 1,
+            workload_order_id: instance.workload_order_id.clone(),
+            buyer_tenant_id: instance.buyer_tenant_id.clone(),
+            allocation_id: instance.workload_instance_id.clone(),
+            lifecycle_status: "workload_accepted".into(),
+            occurred_at: iso_millis_timestamp(instance.created_ms),
+            reason_code: "immutable_executable_binding_resolved".into(),
+            delivered: false,
+        });
+    crate::persist::persist(&cloud);
+    Ok(Json(json!({
+        "workload_instance_id": instance.workload_instance_id,
+        "status": instance.lifecycle_state,
+    })))
+}
+
+fn valid_workload_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.contains('\0')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+}
+
+fn valid_term(term: &CommercialTerm) -> bool {
+    if term.starts_at.len() > 64 || term.ends_at.len() > 64 {
+        return false;
+    }
+    let Ok(starts_at) = chrono::DateTime::parse_from_rfc3339(&term.starts_at) else {
+        return false;
+    };
+    let Ok(ends_at) = chrono::DateTime::parse_from_rfc3339(&term.ends_at) else {
+        return false;
+    };
+    starts_at < ends_at
 }
 
 /// Deliver Marketplace lifecycle evidence without making an allocation request
