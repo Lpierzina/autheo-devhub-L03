@@ -107,6 +107,29 @@ paths:
         '401': {$ref: '#/components/responses/InvalidSignature'}
         '404': {$ref: '#/components/responses/IntentNotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /v1/marketplace/workloads:
+    post:
+      operationId: submitMarketplaceWorkloadIntent
+      summary: Submit commercial workload intent for DevHub execution
+      x-autheo-security-classification: PRIVATE_SERVICE_TO_SERVICE
+      description: |
+        Marketplace supplies commercial intent only. Unknown fields are rejected,
+        including provider/node selection, executable locations or image tags,
+        secrets, manifests, storage implementations, and topology. DevHub
+        resolves the immutable executable binding from its own release authority.
+        Current source-only releases return
+        `release_executable_artifact_unavailable`; no deployment is claimed.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/WorkloadIntentRequest'}}}
+      responses:
+        '200':
+          description: Opaque workload receipt
+          content: {application/json: {schema: {$ref: '#/components/schemas/WorkloadIntentReceipt'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/InvalidSignature'}
+        '409': {$ref: '#/components/responses/Conflict'}
 components:
   securitySchemes:
     marketplaceHmac:
@@ -320,6 +343,44 @@ components:
         allocation_id: {type: string, description: Opaque DevHub-issued receipt}
         workload_handoff_id: {type: [string, 'null'], description: Opaque receipt present only for an accepted workload binding}
         status: {type: string, enum: [submitted, scheduled, failed]}
+    WorkloadIntentRequest:
+      additionalProperties: false
+      required: [workload_order_id, buyer_tenant_id, idempotency_key, project_id, release_id, revision, term, capacity_requirements, continuity_policy]
+      properties:
+        workload_order_id: {type: string}
+        buyer_tenant_id: {type: string}
+        idempotency_key: {type: string, description: Must exactly equal the Idempotency-Key header}
+        project_id: {type: string}
+        release_id: {type: string}
+        revision: {type: string}
+        term:
+          type: object
+          additionalProperties: false
+          required: [starts_at, ends_at]
+          properties:
+            starts_at: {type: string, format: date-time}
+            ends_at: {type: string, format: date-time}
+        capacity_requirements:
+          type: object
+          additionalProperties: false
+          required: [vcpu, memory_mib, storage_gib]
+          properties:
+            vcpu: {type: integer, minimum: 1}
+            memory_mib: {type: integer, minimum: 1}
+            storage_gib: {type: integer, minimum: 1}
+        continuity_policy:
+          type: object
+          additionalProperties: false
+          required: [mode, recovery_point_objective_seconds, recovery_time_objective_seconds]
+          properties:
+            mode: {type: string, enum: [none, warm_standby, automatic_failover]}
+            recovery_point_objective_seconds: {type: integer, minimum: 0}
+            recovery_time_objective_seconds: {type: integer, minimum: 0}
+    WorkloadIntentReceipt:
+      required: [workload_instance_id, status]
+      properties:
+        workload_instance_id: {type: string, description: Opaque DevHub workload identity}
+        status: {type: string, enum: [accepted]}
     WorkloadLifecycleEvent:
       type: object
       additionalProperties: false

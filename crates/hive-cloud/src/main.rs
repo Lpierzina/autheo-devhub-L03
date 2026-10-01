@@ -63,7 +63,6 @@ mod marketplace;
 mod marketplace_gateway;
 mod marketplace_migrations;
 mod marketplace_releases;
-mod marketplace_workloads;
 mod memwatch;
 mod mesh_raw;
 mod mesh_shell;
