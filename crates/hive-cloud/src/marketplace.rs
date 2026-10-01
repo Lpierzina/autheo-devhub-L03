@@ -997,6 +997,7 @@ fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
         .filter_map(|node| {
             let provider_id = node.provider.clone()?.trim().to_owned();
             let provider_recipient = recipients.get(&provider_id)?.clone();
+            let hardware = marketplace_hardware(&node);
             eligible_node(cloud, &node).then(|| ListedDeployment {
                 deployment_id: format!(
                     "dep_{}",
@@ -1016,7 +1017,7 @@ fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
                     },
                     storage_gib: node.disk_total_gb,
                 },
-                hardware: marketplace_hardware(&node),
+                hardware,
                 expires_at_ms,
             })
         })
