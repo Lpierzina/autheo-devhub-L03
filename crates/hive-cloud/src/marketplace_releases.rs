@@ -119,27 +119,6 @@ pub struct MinecraftRuntimeSpec {
 }
 
 impl MinecraftRuntimeSpec {
-    /// The spec contains no caller-controlled values. It is an execution
-    /// contract, not a deployment manifest.
-    fn v1() -> Self {
-        Self {
-            version: "minecraft-runtime-v1".into(),
-            minecraft_version: "artifact-defined".into(),
-            entrypoint: vec!["devhub-minecraft-launcher".into()],
-            launch_arguments: Vec::new(),
-            public_ports: vec![25565],
-            healthcheck: "minecraft-status-tcp-v1".into(),
-            cpu_limit: 0,
-            memory_limit_mib: 0,
-            storage_gib: 0,
-            persistent_volume_schema: "devhub-minecraft-world-v1".into(),
-            shutdown_behavior: "graceful-save-then-stop-v1".into(),
-            startup_timeout_seconds: 0,
-            allowed_environment: Vec::new(),
-            secret_references: Vec::new(),
-        }
-    }
-
     fn digest(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(b"devhub-minecraft-runtime-spec-v1\0");

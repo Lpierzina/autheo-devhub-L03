@@ -62,6 +62,7 @@ const MAX_GPU_VRAM_MIB: u64 = 16 * 1024 * 1024;
 const MAX_WORKLOAD_VCPU: u32 = 65_536;
 const MAX_WORKLOAD_MEMORY_MIB: u64 = 16 * 1024 * 1024;
 const MAX_WORKLOAD_STORAGE_GIB: u64 = 16 * 1024 * 1024;
+const MAX_CONTINUITY_OBJECTIVE_SECONDS: u64 = 366 * 24 * 60 * 60;
 
 #[derive(Serialize)]
 struct ApiError {
@@ -997,6 +998,7 @@ fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
         .filter_map(|node| {
             let provider_id = node.provider.clone()?.trim().to_owned();
             let provider_recipient = recipients.get(&provider_id)?.clone();
+            let hardware = marketplace_hardware(&node);
             eligible_node(cloud, &node).then(|| ListedDeployment {
                 deployment_id: format!(
                     "dep_{}",
@@ -1016,7 +1018,7 @@ fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
                     },
                     storage_gib: node.disk_total_gb,
                 },
-                hardware: marketplace_hardware(&node),
+                hardware,
                 expires_at_ms,
             })
         })
@@ -1784,6 +1786,10 @@ async fn submit_workload_intent(
         || request.capacity_requirements.memory_mib > MAX_WORKLOAD_MEMORY_MIB
         || request.capacity_requirements.storage_gib == 0
         || request.capacity_requirements.storage_gib > MAX_WORKLOAD_STORAGE_GIB
+        || request.continuity_policy.recovery_point_objective_seconds
+            > MAX_CONTINUITY_OBJECTIVE_SECONDS
+        || request.continuity_policy.recovery_time_objective_seconds
+            > MAX_CONTINUITY_OBJECTIVE_SECONDS
     {
         return Err(error(
             axum::http::StatusCode::BAD_REQUEST,
