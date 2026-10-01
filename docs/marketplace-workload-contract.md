@@ -153,6 +153,71 @@ attachment proofs to pass before restoring the capability. Do not manually
 flush unrelated nftables state or broaden BuildExecutor networking. Ordinary
 BuildExecutor jobs remain `--network=none` throughout.
 
+## Immutable executable release binding
+
+An execution-ready Marketplace release has one immutable binding:
+
+```text
+{ project_id, release_id, revision, artifact_id, artifact_digest, runtime_spec_digest }
+```
+
+`artifact_digest` is a lowercase `sha256:` content digest. Its only accepted
+reference form is `devhub://runtime-artifacts/<digest-without-prefix>`.
+`devhub://` is an authority reference, not a network URL: it names a sealed
+runtime-artifact package verified by DevHub's runtime-artifact transfer
+service. Mutable OCI tags, arbitrary image URLs, and Marketplace-provided
+execution references are not artifact identity.
+
+The release record retains the platform import/build transaction and semantic
+tree digest as provenance plus the policy approval fact. Approval is checked
+again when a workload is created. A project revision is inserted once: a
+subsequent attempt to bind that same revision to a different artifact or
+runtime-spec digest fails with `marketplace_release_revision_already_bound`.
+
+The current runtime-artifact transfer service verifies and materializes a
+sealed package for a specific deployment transaction. It is not yet a
+fleet-wide reusable artifact catalog, so a valid binding does not itself claim
+that every node can currently materialize that artifact. A future catalog must
+preserve the same digest/reference contract and reject revoked or unapproved
+artifacts before materialization.
+
+## Minecraft runtime and storage capability boundary
+
+The server-owned `minecraft` runtime spec is versioned and digest-bound to the
+release. It carries the server implementation/version, artifact reference,
+entrypoint and arguments, TCP ports, CPU/memory/storage requirements, a
+required `world` persistent mount, bounded startup/shutdown settings, a
+TCP-listen health contract, allowed environment names, and logical internal
+secret references. Secret values are resolved only by DevHub.
+
+The TCP health check proves that the configured game port is listening. It is
+stronger than node health or process spawn but is not a Minecraft protocol
+ping; no protocol-level probe exists in the current runtime.
+
+Workload instances and volume bindings are durable and placement-independent,
+but the only currently advertised storage backend is `node_local`:
+
+| Capability | Current value |
+| --- | --- |
+| persistent on the attached node | supported |
+| node-local snapshot | supported where the runtime provides it |
+| portable restore | unsupported |
+| replication | unsupported |
+| multi-node attachment | unsupported |
+
+Only `continuity_policy.mode = none` is accepted on this backend.
+`warm_standby` fails closed with `portable_storage_unavailable`; automatic
+failover fails with `automatic_failover_unsupported`. No request is silently
+downgraded.
+
+Before warm standby can be enabled, a DevHub-owned portable backend must
+provide tenant-isolated, authenticated and idempotent create-volume,
+attach/detach, immutable snapshot (digest/reference and explicit consistency
+semantics), restore-on-another-eligible-node, delete/release, encryption, and
+durability guarantees. Cross-node restore, shared volumes, replication,
+fencing, automatic failover, traffic cutover, and zero-downtime migration are
+therefore explicitly unsupported in this phase.
+
 Settlement stays `settlement_unavailable` until the selected
 `autheo-testnet-v1` profile verifies all of:
 

@@ -25,7 +25,13 @@ use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use uuid::Uuid;
 
-use crate::state::CloudState;
+use crate::{
+    marketplace_workloads::{
+        self, ExecutableArtifact, MinecraftRuntimeSpec, PersistentVolumeBinding,
+        ReleaseArtifactBinding, StorageCapabilities, WorkloadInstance,
+    },
+    state::CloudState,
+};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MarketplaceReleaseSnapshot {
@@ -47,6 +53,15 @@ pub struct MarketplaceReleaseSnapshot {
     /// deliberately safe projection and never contains deployment details.
     #[serde(default)]
     pub lifecycle_events: Vec<MarketplaceLifecycleEvent>,
+    /// Placement-independent workload identities.  These are intentionally
+    /// separate from Marketplace allocations: an allocation may be replaced
+    /// without changing the workload's executable or storage identity.
+    #[serde(default)]
+    pub workload_instances: Vec<WorkloadInstance>,
+    /// DevHub storage bindings expose capabilities, never host paths or
+    /// provider-specific implementation details.
+    #[serde(default)]
+    pub persistent_volumes: Vec<PersistentVolumeBinding>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,6 +76,16 @@ pub struct ProjectRelease {
     /// Immutable source/build identity, never an executable deployment request.
     #[serde(default)]
     pub source_identity: String,
+    /// Present only for execution-ready releases created by the immutable
+    /// artifact flow. Legacy source-only releases remain non-executable.
+    #[serde(default)]
+    pub artifact: Option<ExecutableArtifact>,
+    #[serde(default)]
+    pub minecraft_runtime_spec: Option<MinecraftRuntimeSpec>,
+    #[serde(default)]
+    pub runtime_spec_digest: Option<String>,
+    #[serde(default)]
+    pub immutable_binding: Option<ReleaseArtifactBinding>,
     pub created_ms: u64,
 }
 
@@ -141,6 +166,39 @@ impl MarketplaceReleaseStore {
             .cloned()
     }
 
+    pub(crate) fn executable_release(
+        &self,
+        release_id: &str,
+    ) -> Result<ProjectRelease, &'static str> {
+        let release = self.release(release_id).ok_or("marketplace_release_not_found")?;
+        let Some(artifact) = release.artifact.as_ref() else {
+            return Err("marketplace_release_artifact_unresolved");
+        };
+        let Some(spec) = release.minecraft_runtime_spec.as_ref() else {
+            return Err("marketplace_release_runtime_spec_unresolved");
+        };
+        marketplace_workloads::validate_artifact(artifact)?;
+        marketplace_workloads::validate_minecraft_spec(spec, artifact)?;
+        let digest = marketplace_workloads::digest_runtime_spec(spec)
+            .map_err(|_| "marketplace_release_runtime_spec_invalid")?;
+        if release.runtime_spec_digest.as_deref() != Some(digest.as_str())
+            || release
+                .immutable_binding
+                .as_ref()
+                .is_none_or(|binding| {
+                    binding.project_id != release.project_id
+                        || binding.release_id != release.release_id
+                        || binding.revision != release.revision
+                        || binding.artifact_id != artifact.artifact_id
+                        || binding.artifact_digest != artifact.artifact_digest
+                        || binding.runtime_spec_digest != digest
+                })
+        {
+            return Err("marketplace_release_binding_invalid");
+        }
+        Ok(release)
+    }
+
     pub(crate) fn workload(&self, allocation_id: &str) -> Option<MarketplaceWorkload> {
         self.0
             .read()
@@ -210,8 +268,19 @@ impl MarketplaceReleaseStore {
         Ok(())
     }
 
-    fn insert_release(&self, release: ProjectRelease) {
-        self.0.write().releases.push(release);
+    fn insert_release(&self, release: ProjectRelease) -> Result<(), &'static str> {
+        let mut state = self.0.write();
+        if let Some(existing) = state.releases.iter().find(|existing| {
+            existing.project_id == release.project_id && existing.revision == release.revision
+        }) {
+            return if existing.immutable_binding == release.immutable_binding {
+                Ok(())
+            } else {
+                Err("marketplace_release_revision_already_bound")
+            };
+        }
+        state.releases.push(release);
+        Ok(())
     }
 
     fn attach(&self, workload: MarketplaceWorkload) -> Result<MarketplaceWorkload, &'static str> {
@@ -239,6 +308,75 @@ impl MarketplaceReleaseStore {
         Ok(workload)
     }
 
+    /// Create a workload identity and a backend-neutral storage binding.  The
+    /// currently configured capability is node-local, so this does not imply
+    /// that a subsequent allocation can mount it on another node.
+    pub(crate) fn create_workload_instance(
+        &self,
+        workload: &MarketplaceWorkload,
+        continuity_policy: marketplace_workloads::ContinuityPolicy,
+    ) -> Result<WorkloadInstance, &'static str> {
+        let release = self.executable_release(&workload.release_id)?;
+        let artifact = release.artifact.as_ref().expect("validated above");
+        let spec = release
+            .minecraft_runtime_spec
+            .as_ref()
+            .expect("validated above");
+        let capabilities = StorageCapabilities::node_local();
+        marketplace_workloads::validate_continuity(&continuity_policy, &capabilities)?;
+        let mut state = self.0.write();
+        if let Some(existing) = state
+            .workload_instances
+            .iter()
+            .find(|instance| instance.marketplace_workload_reference == workload.workload_handoff_id)
+        {
+            return if existing.project_id == workload.project_id
+                && existing.release_id == workload.release_id
+                && existing.revision == workload.revision
+                && existing.artifact_digest == artifact.artifact_digest
+                && existing.runtime_spec_digest
+                    == release.runtime_spec_digest.clone().unwrap_or_default()
+                && existing.continuity_policy == continuity_policy
+            {
+                Ok(existing.clone())
+            } else {
+                Err("marketplace_workload_instance_conflict")
+            };
+        }
+        let now = hive_core::now_ms();
+        let workload_instance_id = format!("mwi_{}", Uuid::new_v4().simple());
+        let volume_id = format!("mpv_{}", Uuid::new_v4().simple());
+        let instance = WorkloadInstance {
+            workload_instance_id: workload_instance_id.clone(),
+            marketplace_workload_reference: workload.workload_handoff_id.clone(),
+            buyer_tenant: workload.buyer_tenant.clone(),
+            project_id: workload.project_id.clone(),
+            release_id: workload.release_id.clone(),
+            revision: workload.revision.clone(),
+            artifact_id: artifact.artifact_id.clone(),
+            artifact_digest: artifact.artifact_digest.clone(),
+            runtime_spec_version: spec.version,
+            runtime_spec_digest: release.runtime_spec_digest.clone().unwrap_or_default(),
+            lifecycle_state: "created".into(),
+            current_primary_allocation: Some(workload.allocation_id.clone()),
+            storage_binding_id: volume_id.clone(),
+            continuity_policy,
+            created_ms: now,
+            updated_ms: now,
+        };
+        state.persistent_volumes.push(PersistentVolumeBinding {
+            volume_id,
+            workload_instance_id,
+            backend: "node_local".into(),
+            created_ms: now,
+            current_attachment: None,
+            durability_state: "node_local_persistent".into(),
+            capabilities,
+        });
+        state.workload_instances.push(instance.clone());
+        Ok(instance)
+    }
+
     /// Attach a workload only after the Marketplace allocation boundary has
     /// verified its payment, tenant, project, and immutable release binding.
     /// This keeps browser-authenticated project routes out of the commercial
@@ -252,7 +390,7 @@ impl MarketplaceReleaseStore {
         revision: String,
         buyer_tenant: String,
     ) -> Result<MarketplaceWorkload, &'static str> {
-        self.attach(MarketplaceWorkload {
+        let workload = self.attach(MarketplaceWorkload {
             workload_handoff_id,
             allocation_id,
             project_id,
@@ -262,7 +400,14 @@ impl MarketplaceReleaseStore {
             client_certificate_delivery_requested: false,
             credential_id: None,
             created_ms: hive_core::now_ms(),
-        })
+        })?;
+        self.create_workload_instance(
+            &workload,
+            marketplace_workloads::ContinuityPolicy {
+                mode: "none".into(),
+            },
+        )?;
+        Ok(workload)
     }
 
     pub fn workload_for_project(&self, project: &str) -> Option<MarketplaceWorkload> {
@@ -611,6 +756,10 @@ struct CreateReleaseRequest {
     workload_client_certificate: Option<WorkloadClientCertificateCapability>,
     #[serde(default)]
     source_identity: String,
+    #[serde(default)]
+    artifact: Option<ExecutableArtifact>,
+    #[serde(default)]
+    minecraft_runtime_spec: Option<MinecraftRuntimeSpec>,
 }
 
 #[derive(Deserialize)]
@@ -626,6 +775,10 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
         .route(
             "/v1/projects/:project/marketplace-releases",
             post(create_release),
+        )
+        .route(
+            "/v1/projects/:project/marketplace-workloads",
+            post(attach_workload),
         )
         .with_state(cloud)
 }
@@ -683,20 +836,62 @@ async fn create_release(
             "invalid_marketplace_release".into(),
         ));
     }
+    let executable = match (request.artifact, request.minecraft_runtime_spec) {
+        (Some(artifact), Some(spec)) => {
+            marketplace_workloads::validate_artifact(&artifact).map_err(|code| {
+                (axum::http::StatusCode::BAD_REQUEST, code.into())
+            })?;
+            marketplace_workloads::validate_minecraft_spec(&spec, &artifact).map_err(|code| {
+                (axum::http::StatusCode::BAD_REQUEST, code.into())
+            })?;
+            let digest = marketplace_workloads::digest_runtime_spec(&spec).map_err(|_| {
+                (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "marketplace_release_runtime_spec_invalid".into(),
+                )
+            })?;
+            Some((artifact, spec, digest))
+        }
+        (None, None) => None,
+        _ => {
+            return Err((
+                axum::http::StatusCode::BAD_REQUEST,
+                "marketplace_release_binding_incomplete".into(),
+            ))
+        }
+    };
+    let release_id = format!("rel_{}", Uuid::new_v4().simple());
+    let immutable_binding = executable.as_ref().map(|(artifact, _, digest)| ReleaseArtifactBinding {
+        project_id: project.clone(),
+        release_id: release_id.clone(),
+        revision: request.revision.clone(),
+        artifact_id: artifact.artifact_id.clone(),
+        artifact_digest: artifact.artifact_digest.clone(),
+        runtime_spec_digest: digest.clone(),
+    });
     let release = ProjectRelease {
-        release_id: format!("rel_{}", Uuid::new_v4().simple()),
+        release_id,
         project_id: project,
         revision: request.revision,
         published: request.published,
         revoked: false,
         workload_client_certificate: request.workload_client_certificate,
         source_identity: request.source_identity,
+        artifact: executable.as_ref().map(|(artifact, _, _)| artifact.clone()),
+        minecraft_runtime_spec: executable.as_ref().map(|(_, spec, _)| spec.clone()),
+        runtime_spec_digest: executable.as_ref().map(|(_, _, digest)| digest.clone()),
+        immutable_binding,
         created_ms: hive_core::now_ms(),
     };
-    cloud.marketplace_releases.insert_release(release.clone());
+    cloud
+        .marketplace_releases
+        .insert_release(release.clone())
+        .map_err(|code| (axum::http::StatusCode::CONFLICT, code.into()))?;
     crate::persist::persist(&cloud);
     Ok(Json(
-        json!({"release_id": release.release_id, "revision": release.revision}),
+        json!({"release_id": release.release_id, "revision": release.revision,
+            "artifact_digest": release.artifact.as_ref().map(|artifact| &artifact.artifact_digest),
+            "runtime_spec_digest": release.runtime_spec_digest}),
     ))
 }
 
@@ -777,6 +972,15 @@ async fn attach_workload(
             created_ms: hive_core::now_ms(),
         })
         .map_err(|code| (axum::http::StatusCode::CONFLICT, code.into()))?;
+    let instance = cloud
+        .marketplace_releases
+        .create_workload_instance(
+            &workload,
+            marketplace_workloads::ContinuityPolicy {
+                mode: "none".into(),
+            },
+        )
+        .map_err(|code| (axum::http::StatusCode::CONFLICT, code.into()))?;
     // The Marketplace project has one engine identity. Reuse the ordinary
     // managed-database record and provisioning path so project ownership,
     // host routing, lifecycle fencing, and reconciliation remain unchanged.
@@ -819,5 +1023,6 @@ async fn attach_workload(
         "allocation_id": workload.allocation_id,
         "release_id": workload.release_id,
         "revision": workload.revision,
+        "workload_instance_id": instance.workload_instance_id,
     })))
 }
