@@ -17,12 +17,16 @@ use tokio::process::Command;
 const STATEFUL_AFFINITY_REQUIRED: &str = "stateful_workload_node_affinity_required";
 
 pub fn spawn(cloud: Arc<CloudState>) {
-    tokio::spawn(async move {
-        loop {
-            for instance in cloud.marketplace_releases.workload_instances() {
-                reconcile(&cloud, instance).await;
+    crate::supervise::spawn_supervised("minecraft-workload-reconcile", move || {
+        let cloud = cloud.clone();
+        async move {
+            loop {
+                crate::supervise::beat("minecraft-workload-reconcile");
+                for instance in cloud.marketplace_releases.workload_instances() {
+                    reconcile(&cloud, instance).await;
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
-            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     });
 }
