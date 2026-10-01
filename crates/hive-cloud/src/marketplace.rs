@@ -7,19 +7,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    Router,
     body::{Body, Bytes},
     extract::State,
     http::HeaderMap,
     middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
+    Router,
 };
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 use tower::ServiceExt;
@@ -439,6 +439,16 @@ impl AllocationStore {
     }
     pub(crate) fn get(&self, id: &str) -> Option<Allocation> {
         self.0.read().get(id).cloned()
+    }
+    pub(crate) fn for_workload_order(&self, workload_order_id: &str) -> Option<Allocation> {
+        self.0
+            .read()
+            .values()
+            .find(|allocation| {
+                allocation.workload_order_id.as_deref() == Some(workload_order_id)
+                    && allocation.status == "scheduled"
+            })
+            .cloned()
     }
     fn put_if_absent(&self, allocation: Allocation) -> Result<Allocation, Allocation> {
         let mut state = self.0.write();
@@ -1840,6 +1850,17 @@ async fn submit_workload_intent(
             lifecycle_state: String::new(),
             current_primary_allocation: None,
             persistent_storage_id: None,
+            storage_node: None,
+            storage_persistent: true,
+            storage_snapshot: false,
+            storage_portable_restore: false,
+            storage_replication: false,
+            storage_multi_node_attach: false,
+            runtime_container_id: None,
+            runtime_process_started: false,
+            runtime_healthy: false,
+            workload_ready: false,
+            failure_reason: None,
             continuity_policy: request.continuity_policy.mode,
             created_ms: hive_core::now_ms(),
         })
