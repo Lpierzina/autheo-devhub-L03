@@ -191,6 +191,18 @@ pub struct DevHubWorkloadInstance {
     /// volume.
     #[serde(default)]
     pub storage_node: Option<String>,
+    /// Honest v1 storage capabilities.  The `world` volume survives a runtime
+    /// restart on this node only; it is neither transferable nor replicated.
+    #[serde(default = "storage_persistent")]
+    pub storage_persistent: bool,
+    #[serde(default)]
+    pub storage_snapshot: bool,
+    #[serde(default)]
+    pub storage_portable_restore: bool,
+    #[serde(default)]
+    pub storage_replication: bool,
+    #[serde(default)]
+    pub storage_multi_node_attach: bool,
     #[serde(default)]
     pub runtime_container_id: Option<String>,
     #[serde(default)]
@@ -738,6 +750,10 @@ fn valid_minecraft_runtime_spec(spec: &MinecraftRuntimeSpec) -> bool {
             .secret_references
             .iter()
             .all(|reference| reference.starts_with("devhub-secret://") && reference.len() <= 256)
+}
+
+fn storage_persistent() -> bool {
+    true
 }
 
 fn configured_path(name: &str) -> Result<PathBuf, &'static str> {
