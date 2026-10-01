@@ -740,6 +740,35 @@ async fn dispatch_verified(
                 .unwrap_or_default();
             jb(crate::zkauth::mint_rpc(&team, &user, &project).await)
         }
+        // Catalog artifact bytes are a separate immutable-materialization
+        // protocol, never a deployment fanout. Exact bounded ranges let a
+        // target verify package bytes before they can become executable.
+        p if method == hive_p2p::GOSSIP_GET
+            && p.starts_with("/v1/devhub/runtime-artifacts/v1/")
+            && p.split('?').next().is_some_and(|path| path.ends_with("/package")) =>
+        {
+            let path = p.split('?').next().unwrap_or_default();
+            let digest = path
+                .strip_prefix("/v1/devhub/runtime-artifacts/v1/")
+                .and_then(|value| value.strip_suffix("/package"))
+                .unwrap_or_default();
+            let offset = qparam(p, "offset")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(u64::MAX);
+            let length = qparam(p, "length")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            let token = qparam(p, "tok");
+            crate::artifact_catalog_transfer::mesh_dispatch(
+                cloud,
+                digest,
+                signer,
+                token.as_deref(),
+                offset,
+                length,
+            )
+            .await
+        }
         // Bounded immutable runtime-artifact transfer. Exact versioned operation
         // paths must stay ahead of every broader runtime/deploy arm: old peers
         // answer an unknown path with an empty body, which the sender treats as

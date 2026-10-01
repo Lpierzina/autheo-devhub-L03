@@ -8,6 +8,7 @@
 mod acme;
 mod admin;
 mod apikeys;
+mod artifact_catalog_transfer;
 mod app_discovery;
 mod audit;
 mod auth;
