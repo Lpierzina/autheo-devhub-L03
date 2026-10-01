@@ -154,6 +154,11 @@ pub struct DevHubWorkloadInstance {
     pub workload_order_id: String,
     pub buyer_tenant_id: String,
     pub marketplace_idempotency_key: String,
+    pub term_starts_at: String,
+    pub term_ends_at: String,
+    pub requested_vcpu: u32,
+    pub requested_memory_mib: u64,
+    pub requested_storage_gib: u64,
     pub project_id: String,
     pub release_id: String,
     pub revision: String,
@@ -353,6 +358,11 @@ impl MarketplaceReleaseStore {
         }) {
             return if existing.workload_order_id == instance.workload_order_id
                 && existing.buyer_tenant_id == instance.buyer_tenant_id
+                && existing.term_starts_at == instance.term_starts_at
+                && existing.term_ends_at == instance.term_ends_at
+                && existing.requested_vcpu == instance.requested_vcpu
+                && existing.requested_memory_mib == instance.requested_memory_mib
+                && existing.requested_storage_gib == instance.requested_storage_gib
                 && existing.project_id == instance.project_id
                 && existing.release_id == instance.release_id
                 && existing.revision == instance.revision
