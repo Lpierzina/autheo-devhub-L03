@@ -93,6 +93,18 @@ async fn reconcile(cloud: &Arc<CloudState>, mut instance: DevHubWorkloadInstance
         fail(cloud, &mut instance, "artifact_unapproved_or_revoked").await;
         return;
     }
+    if catalog.storage_node != cloud.node_name {
+        // The legacy transfer store's package bytes are node-local.  Never
+        // treat a replicated catalog record as evidence that another node has
+        // the bytes, and never substitute a mutable remote image/tag.
+        fail(
+            cloud,
+            &mut instance,
+            "artifact_unavailable_on_allocated_node",
+        )
+        .await;
+        return;
+    }
 
     transition(
         cloud,

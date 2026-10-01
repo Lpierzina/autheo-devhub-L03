@@ -121,6 +121,10 @@ pub struct DevHubRuntimeArtifact {
     pub policy_validated: bool,
     pub storage_backend: String,
     pub storage_reference: String,
+    /// Existing sealed-package bytes are durable only on this node.  The
+    /// catalog replicates the fact, never the bytes, so execution fails closed
+    /// if allocation targets another node.
+    pub storage_node: String,
     #[serde(default)]
     pub revoked: bool,
     /// Descriptor-bound package metadata is what lets DevHub re-open and
@@ -300,6 +304,7 @@ impl MarketplaceReleaseStore {
             || artifact.size_bytes != artifact.package.package_bytes
             || artifact.workload_type != "minecraft"
             || artifact.storage_backend != "sealed-runtime-artifact-package-v1"
+            || artifact.storage_node.trim().is_empty()
             || artifact.revoked
         {
             return Err("devhub_artifact_invalid");
@@ -1076,6 +1081,7 @@ async fn import_runtime_artifact(
             policy_validated: request.policy_validated,
             storage_backend: "sealed-runtime-artifact-package-v1".into(),
             storage_reference: "sealed-runtime-artifact-package-v1".into(),
+            storage_node: cloud.node_name.clone(),
             revoked: false,
             package: request.package,
         })
