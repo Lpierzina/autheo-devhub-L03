@@ -13,14 +13,14 @@
 use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc};
 
 use axum::{
+    Router,
     body::Body,
     extract::State,
     http::{HeaderName, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
 use crate::state::CloudState;
@@ -54,6 +54,7 @@ fn allowed_path(path: &str) -> bool {
             | "/v1/marketplace/payment-intents"
             | "/v1/marketplace/payments/verify"
             | "/v1/marketplace/l0/allocations"
+            | "/v1/marketplace/workloads"
     )
 }
 
@@ -126,7 +127,7 @@ async fn gateway_request(State(cloud): State<Arc<CloudState>>, req: Request<Body
             return gateway_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "marketplace_request_too_large",
-            )
+            );
         }
     };
     let Some(request) = mesh_request(&parts, &body) else {
@@ -135,7 +136,7 @@ async fn gateway_request(State(cloud): State<Arc<CloudState>>, req: Request<Body
     let request_bytes = match serde_json::to_vec(&request) {
         Ok(value) => value,
         Err(_) => {
-            return gateway_error(StatusCode::BAD_GATEWAY, "marketplace_gateway_encode_failed")
+            return gateway_error(StatusCode::BAD_GATEWAY, "marketplace_gateway_encode_failed");
         }
     };
 
@@ -200,6 +201,7 @@ fn routes(cloud: Arc<CloudState>) -> Router {
         .route("/v1/marketplace/payment-intents", post(gateway_request))
         .route("/v1/marketplace/payments/verify", post(gateway_request))
         .route("/v1/marketplace/l0/allocations", post(gateway_request))
+        .route("/v1/marketplace/workloads", post(gateway_request))
         .with_state(cloud)
 }
 

@@ -12,15 +12,15 @@ use std::{
 };
 
 use axum::{
+    Router,
     extract::{Path, State},
     http::HeaderMap,
     response::Json,
     routing::post,
-    Router,
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use uuid::Uuid;
@@ -33,6 +33,10 @@ pub struct MarketplaceReleaseSnapshot {
     pub releases: Vec<ProjectRelease>,
     #[serde(default)]
     pub workloads: Vec<MarketplaceWorkload>,
+    /// DevHub workload identities are separate from Marketplace's commercial
+    /// order and from a future compute allocation. They survive reassignment.
+    #[serde(default)]
+    pub workload_instances: Vec<DevHubWorkloadInstance>,
     /// Successful migration applications are immutable facts, not build logs.
     /// They replicate with the release authority because both are required to
     /// decide whether a Marketplace workload may become ready.
@@ -61,6 +65,106 @@ pub struct ProjectRelease {
     /// Immutable source/build identity, never an executable deployment request.
     #[serde(default)]
     pub source_identity: String,
+    /// Server-owned execution binding. Existing source-only releases have no
+    /// binding and are deliberately not executable Marketplace releases.
+    #[serde(default)]
+    pub execution: Option<ReleaseExecutionBinding>,
+    pub created_ms: u64,
+}
+
+/// The immutable executable authority for one release revision. The current
+/// platform has no DevHub-wide artifact catalog, so this type is intentionally
+/// only populated by a future internal artifact-storage integration; callers
+/// cannot submit it through the project or Marketplace APIs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReleaseExecutionBinding {
+    pub artifact: ExecutableWorkloadArtifact,
+    pub runtime_spec: MinecraftRuntimeSpec,
+    pub runtime_spec_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExecutableWorkloadArtifact {
+    /// SHA-256 of immutable executable bytes, never an image tag or URL.
+    pub digest: String,
+    /// An opaque DevHub artifact-store key, never a path, URL, or registry
+    /// location disclosed to Marketplace.
+    pub storage_reference: String,
+    pub workload_type: String,
+    pub provenance: String,
+    pub approval_state: String,
+    pub created_ms: u64,
+    pub security_validated: bool,
+    pub policy_validated: bool,
+}
+
+/// Versioned, server-owned Minecraft launch contract. Secrets are represented
+/// only by internal selectors; their values never enter a release record.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MinecraftRuntimeSpec {
+    pub version: String,
+    pub minecraft_version: String,
+    pub entrypoint: Vec<String>,
+    pub launch_arguments: Vec<String>,
+    pub public_ports: Vec<u16>,
+    pub healthcheck: String,
+    pub cpu_limit: u32,
+    pub memory_limit_mib: u64,
+    pub storage_gib: u64,
+    pub persistent_volume_schema: String,
+    pub shutdown_behavior: String,
+    pub startup_timeout_seconds: u64,
+    pub allowed_environment: Vec<String>,
+    pub secret_references: Vec<String>,
+}
+
+impl MinecraftRuntimeSpec {
+    /// The spec contains no caller-controlled values. It is an execution
+    /// contract, not a deployment manifest.
+    fn v1() -> Self {
+        Self {
+            version: "minecraft-runtime-v1".into(),
+            minecraft_version: "artifact-defined".into(),
+            entrypoint: vec!["devhub-minecraft-launcher".into()],
+            launch_arguments: Vec::new(),
+            public_ports: vec![25565],
+            healthcheck: "minecraft-status-tcp-v1".into(),
+            cpu_limit: 0,
+            memory_limit_mib: 0,
+            storage_gib: 0,
+            persistent_volume_schema: "devhub-minecraft-world-v1".into(),
+            shutdown_behavior: "graceful-save-then-stop-v1".into(),
+            startup_timeout_seconds: 0,
+            allowed_environment: Vec::new(),
+            secret_references: Vec::new(),
+        }
+    }
+
+    fn digest(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"devhub-minecraft-runtime-spec-v1\0");
+        hasher.update(serde_json::to_vec(self).expect("runtime spec serializes"));
+        hex::encode(hasher.finalize())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DevHubWorkloadInstance {
+    pub workload_instance_id: String,
+    pub workload_order_id: String,
+    pub buyer_tenant_id: String,
+    pub marketplace_idempotency_key: String,
+    pub project_id: String,
+    pub release_id: String,
+    pub revision: String,
+    pub artifact_digest: String,
+    pub runtime_spec_digest: String,
+    pub lifecycle_state: String,
+    #[serde(default)]
+    pub current_primary_allocation: Option<String>,
+    #[serde(default)]
+    pub persistent_storage_id: Option<String>,
+    pub continuity_policy: String,
     pub created_ms: u64,
 }
 
@@ -212,6 +316,63 @@ impl MarketplaceReleaseStore {
 
     fn insert_release(&self, release: ProjectRelease) {
         self.0.write().releases.push(release);
+    }
+
+    /// Resolve only a fully approved immutable executable binding. A
+    /// source/build identity is provenance, not executable authority.
+    pub(crate) fn executable_binding(
+        &self,
+        project_id: &str,
+        release_id: &str,
+        revision: &str,
+    ) -> Option<ReleaseExecutionBinding> {
+        let release = self.release(release_id).filter(|release| {
+            release.project_id == project_id
+                && release.revision == revision
+                && release.published
+                && !release.revoked
+        })?;
+        let binding = release.execution?;
+        (binding.artifact.workload_type == "minecraft"
+            && binding.artifact.approval_state == "approved"
+            && binding.artifact.security_validated
+            && binding.artifact.policy_validated
+            && valid_sha256(&binding.artifact.digest)
+            && binding.runtime_spec.version == "minecraft-runtime-v1"
+            && binding.runtime_spec_digest == binding.runtime_spec.digest())
+        .then_some(binding)
+    }
+
+    pub(crate) fn accept_workload_instance(
+        &self,
+        mut instance: DevHubWorkloadInstance,
+    ) -> Result<DevHubWorkloadInstance, &'static str> {
+        let mut state = self.0.write();
+        if let Some(existing) = state.workload_instances.iter().find(|existing| {
+            existing.marketplace_idempotency_key == instance.marketplace_idempotency_key
+        }) {
+            return if existing.workload_order_id == instance.workload_order_id
+                && existing.buyer_tenant_id == instance.buyer_tenant_id
+                && existing.project_id == instance.project_id
+                && existing.release_id == instance.release_id
+                && existing.revision == instance.revision
+                && existing.continuity_policy == instance.continuity_policy
+            {
+                Ok(existing.clone())
+            } else {
+                Err("marketplace_workload_idempotency_conflict")
+            };
+        }
+        if state
+            .workload_instances
+            .iter()
+            .any(|existing| existing.workload_order_id == instance.workload_order_id)
+        {
+            return Err("marketplace_workload_order_already_accepted");
+        }
+        instance.lifecycle_state = "accepted".into();
+        state.workload_instances.push(instance.clone());
+        Ok(instance)
     }
 
     fn attach(&self, workload: MarketplaceWorkload) -> Result<MarketplaceWorkload, &'static str> {
@@ -373,6 +534,13 @@ fn credential_id(allocation: &str, project: &str, release: &str) -> String {
         hasher.update(value.as_bytes());
     }
     format!("mwc-{}", hex::encode(hasher.finalize()))
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn configured_path(name: &str) -> Result<PathBuf, &'static str> {
@@ -691,6 +859,10 @@ async fn create_release(
         revoked: false,
         workload_client_certificate: request.workload_client_certificate,
         source_identity: request.source_identity,
+        // Source identity is retained for provenance only. The current
+        // release endpoint cannot attach a DevHub-stored immutable artifact,
+        // so a newly created release is intentionally source-only.
+        execution: None,
         created_ms: hive_core::now_ms(),
     };
     cloud.marketplace_releases.insert_release(release.clone());
