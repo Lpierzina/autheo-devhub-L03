@@ -1859,6 +1859,8 @@ async fn submit_workload_intent(
             runtime_container_id: None,
             runtime_process_started: false,
             runtime_healthy: false,
+            tcp_ready: false,
+            minecraft_application_ready: false,
             workload_ready: false,
             failure_reason: None,
             continuity_policy: request.continuity_policy.mode,

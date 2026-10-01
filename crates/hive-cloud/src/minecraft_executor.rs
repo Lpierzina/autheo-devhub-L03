@@ -97,19 +97,6 @@ async fn reconcile(cloud: &Arc<CloudState>, mut instance: DevHubWorkloadInstance
         fail(cloud, &mut instance, "artifact_unapproved_or_revoked").await;
         return;
     }
-    if catalog.storage_node != cloud.node_name {
-        // The legacy transfer store's package bytes are node-local.  Never
-        // treat a replicated catalog record as evidence that another node has
-        // the bytes, and never substitute a mutable remote image/tag.
-        fail(
-            cloud,
-            &mut instance,
-            "artifact_unavailable_on_allocated_node",
-        )
-        .await;
-        return;
-    }
-
     transition(
         cloud,
         &mut instance,
@@ -124,9 +111,19 @@ async fn reconcile(cloud: &Arc<CloudState>, mut instance: DevHubWorkloadInstance
     let store = crate::persist::data_dir().join("runtime-artifacts-v1");
     let sealed = match hive_backend::reopen_sealed_runtime_artifact(&store, &catalog.package) {
         Ok(sealed) => sealed,
-        Err(_) => {
-            fail(cloud, &mut instance, "artifact_missing").await;
-            return;
+        Err(_) => match crate::artifact_catalog_transfer::materialize(cloud, &catalog).await {
+            Ok(()) => match hive_backend::reopen_sealed_runtime_artifact(&store, &catalog.package)
+            {
+                Ok(sealed) => sealed,
+                Err(_) => {
+                    fail(cloud, &mut instance, "artifact_materialization_failure").await;
+                    return;
+                }
+            },
+            Err(_) => {
+                fail(cloud, &mut instance, "artifact_materialization_failure").await;
+                return;
+            }
         }
     };
     if sealed.verified_package().is_err() {
@@ -200,12 +197,27 @@ async fn reconcile(cloud: &Arc<CloudState>, mut instance: DevHubWorkloadInstance
         "runtime_process_started",
     );
 
-    // Readiness is explicitly TCP-listen only in this milestone.  It proves
-    // the selected Minecraft port accepts a connection; it does not claim
-    // Minecraft protocol status/ping success.
+    // Keep liveness, TCP readiness, and application readiness as independent
+    // facts. A TCP listener can exist while the Java server is still loading
+    // worlds or plugins, so it is never evidence of a Minecraft response.
     match published_port(&container).await {
         Some(port) if tcp_ready(port, binding.runtime_spec.startup_timeout_seconds).await => {
-            instance.workload_ready = true;
+            instance.tcp_ready = true;
+            let minecraft_ready = minecraft_status_ready(
+                port,
+                binding.runtime_spec.startup_timeout_seconds,
+            )
+            .await;
+            instance.minecraft_application_ready = minecraft_ready;
+            instance.workload_ready = if binding.runtime_spec.healthcheck == "minecraft-status-v1" {
+                minecraft_ready
+            } else {
+                true
+            };
+            if !instance.workload_ready {
+                fail(cloud, &mut instance, "minecraft_status_readiness_timeout").await;
+                return;
+            }
             instance.lifecycle_state = "ready".into();
             instance.failure_reason = None;
             cloud
@@ -216,7 +228,11 @@ async fn reconcile(cloud: &Arc<CloudState>, mut instance: DevHubWorkloadInstance
                 cloud,
                 &instance,
                 "workload.ready",
-                "tcp_port_accepting_connections",
+                if minecraft_ready {
+                    "minecraft_status_response_verified"
+                } else {
+                    "tcp_port_accepting_connections"
+                },
             );
         }
         _ => fail(cloud, &mut instance, "readiness_timeout").await,
@@ -316,6 +332,113 @@ async fn tcp_ready(port: u16, timeout_seconds: u64) -> bool {
     false
 }
 
+/// Vanilla Java Edition Server List Ping. This uses the protocol's stable
+/// status-state handshake directly, avoiding a new client dependency. The
+/// protocol version is deliberately a broadly-supported value: status ping is
+/// accepted across Minecraft versions even where a login would be rejected.
+async fn minecraft_status_ready(port: u16, timeout_seconds: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
+    while tokio::time::Instant::now() < deadline {
+        if tokio::time::timeout(Duration::from_secs(3), minecraft_status_once(port))
+            .await
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    false
+}
+
+async fn minecraft_status_once(port: u16) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+    let host = b"localhost";
+    let mut handshake = Vec::with_capacity(32);
+    put_varint(&mut handshake, 0); // handshake packet id
+    put_varint(&mut handshake, 754); // protocol number is irrelevant in status state
+    put_varint(&mut handshake, host.len() as i32);
+    handshake.extend_from_slice(host);
+    handshake.extend_from_slice(&port.to_be_bytes());
+    put_varint(&mut handshake, 1); // status state
+    let mut frame = Vec::new();
+    put_varint(&mut frame, handshake.len() as i32);
+    frame.extend_from_slice(&handshake);
+    // Status request: packet length 1, packet id 0.
+    frame.extend_from_slice(&[1, 0]);
+    if stream.write_all(&frame).await.is_err() || stream.flush().await.is_err() {
+        return false;
+    }
+    let length = match read_varint(&mut stream).await {
+        Some(length) if (1..=1024 * 1024).contains(&length) => length as usize,
+        _ => return false,
+    };
+    let mut reply = vec![0u8; length];
+    if stream.read_exact(&mut reply).await.is_err() {
+        return false;
+    }
+    let mut cursor = 0usize;
+    if take_varint(&reply, &mut cursor) != Some(0) {
+        return false;
+    }
+    let Some(json_length) = take_varint(&reply, &mut cursor) else {
+        return false;
+    };
+    let Ok(json_length) = usize::try_from(json_length) else {
+        return false;
+    };
+    let Some(json) = reply.get(cursor..cursor.saturating_add(json_length)) else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(json)
+        .ok()
+        .is_some_and(|value| value.get("version").is_some() && value.get("players").is_some())
+}
+
+fn put_varint(output: &mut Vec<u8>, value: i32) {
+    let mut value = value as u32;
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        output.push(byte);
+        if value == 0 {
+            return;
+        }
+    }
+}
+
+async fn read_varint(stream: &mut tokio::net::TcpStream) -> Option<i32> {
+    use tokio::io::AsyncReadExt;
+    let mut value = 0u32;
+    for position in 0..5 {
+        let byte = stream.read_u8().await.ok()?;
+        value |= u32::from(byte & 0x7f) << (position * 7);
+        if byte & 0x80 == 0 {
+            return Some(value as i32);
+        }
+    }
+    None
+}
+
+fn take_varint(input: &[u8], cursor: &mut usize) -> Option<i32> {
+    let mut value = 0u32;
+    for position in 0..5 {
+        let byte = *input.get(*cursor)?;
+        *cursor += 1;
+        value |= u32::from(byte & 0x7f) << (position * 7);
+        if byte & 0x80 == 0 {
+            return Some(value as i32);
+        }
+    }
+    None
+}
+
 fn resolve_secret_references(references: &[String]) -> Result<Vec<(String, String)>, &'static str> {
     references
         .iter()
@@ -354,6 +477,8 @@ async fn fail(cloud: &Arc<CloudState>, instance: &mut DevHubWorkloadInstance, re
     instance.lifecycle_state = "failed".into();
     instance.failure_reason = Some(reason.into());
     instance.runtime_healthy = false;
+    instance.tcp_ready = false;
+    instance.minecraft_application_ready = false;
     instance.workload_ready = false;
     cloud
         .marketplace_releases

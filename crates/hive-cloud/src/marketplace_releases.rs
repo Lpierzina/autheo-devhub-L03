@@ -34,6 +34,11 @@ pub struct MarketplaceReleaseSnapshot {
     /// replicated catalog and approval record, never a second blob store.
     #[serde(default)]
     pub runtime_artifacts: Vec<DevHubRuntimeArtifact>,
+    /// Append-only execution evidence for catalog byte availability. This is
+    /// not a storage locator and never substitutes for reopening the verified
+    /// local sealed artifact on the executing node.
+    #[serde(default)]
+    pub artifact_materializations: Vec<ArtifactMaterializationEvidence>,
     #[serde(default)]
     pub releases: Vec<ProjectRelease>,
     #[serde(default)]
@@ -132,6 +137,18 @@ pub struct DevHubRuntimeArtifact {
     pub package: hive_backend::RuntimeArtifactPackageDescriptor,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ArtifactMaterializationEvidence {
+    pub requested_digest: String,
+    pub source_node: String,
+    pub target_node: String,
+    /// `already_verified`, `materialized`, or `failed`.
+    pub result: String,
+    #[serde(default)]
+    pub verified_digest: Option<String>,
+    pub timestamp_ms: u64,
+}
+
 /// Versioned, server-owned Minecraft launch contract. Secrets are represented
 /// only by internal selectors; their values never enter a release record.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -209,6 +226,17 @@ pub struct DevHubWorkloadInstance {
     pub runtime_process_started: bool,
     #[serde(default)]
     pub runtime_healthy: bool,
+    /// A raw TCP connect has reached the published Minecraft game port.
+    /// This is intentionally separate from process liveness and protocol
+    /// readiness: a listening port can exist before a server can answer a
+    /// Minecraft status request.
+    #[serde(default)]
+    pub tcp_ready: bool,
+    /// The server completed the Minecraft Server List Ping status exchange.
+    /// Old `tcp-listen-v1` release contracts leave this false rather than
+    /// overstating their weaker readiness evidence.
+    #[serde(default)]
+    pub minecraft_application_ready: bool,
     #[serde(default)]
     pub workload_ready: bool,
     #[serde(default)]
@@ -301,6 +329,22 @@ impl MarketplaceReleaseStore {
             .iter()
             .find(|artifact| artifact.sha256 == digest)
             .cloned()
+    }
+
+    pub(crate) fn record_artifact_materialization(
+        &self,
+        evidence: ArtifactMaterializationEvidence,
+    ) {
+        let mut state = self.0.write();
+        state.artifact_materializations.push(evidence);
+        // Availability is diagnostic history, not artifact authority. Keep a
+        // bounded tail so repeated transport failures cannot grow the durable
+        // release snapshot without limit.
+        const MAX_EVIDENCE: usize = 512;
+        if state.artifact_materializations.len() > MAX_EVIDENCE {
+            let excess = state.artifact_materializations.len() - MAX_EVIDENCE;
+            state.artifact_materializations.drain(..excess);
+        }
     }
 
     /// Import is content-addressed and therefore idempotent.  A digest can
@@ -735,7 +779,10 @@ fn valid_minecraft_runtime_spec(spec: &MinecraftRuntimeSpec) -> bool {
         && !spec.minecraft_version.trim().is_empty()
         && !spec.entrypoint.is_empty()
         && spec.public_ports == vec![25565]
-        && spec.healthcheck == "tcp-listen-v1"
+        && matches!(
+            spec.healthcheck.as_str(),
+            "tcp-listen-v1" | "minecraft-status-v1"
+        )
         && spec.cpu_limit > 0
         && spec.memory_limit_mib >= 512
         && spec.storage_gib > 0
