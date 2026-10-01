@@ -170,7 +170,9 @@ impl MarketplaceReleaseStore {
         &self,
         release_id: &str,
     ) -> Result<ProjectRelease, &'static str> {
-        let release = self.release(release_id).ok_or("marketplace_release_not_found")?;
+        let release = self
+            .release(release_id)
+            .ok_or("marketplace_release_not_found")?;
         let Some(artifact) = release.artifact.as_ref() else {
             return Err("marketplace_release_artifact_unresolved");
         };
@@ -182,17 +184,14 @@ impl MarketplaceReleaseStore {
         let digest = marketplace_workloads::digest_runtime_spec(spec)
             .map_err(|_| "marketplace_release_runtime_spec_invalid")?;
         if release.runtime_spec_digest.as_deref() != Some(digest.as_str())
-            || release
-                .immutable_binding
-                .as_ref()
-                .is_none_or(|binding| {
-                    binding.project_id != release.project_id
-                        || binding.release_id != release.release_id
-                        || binding.revision != release.revision
-                        || binding.artifact_id != artifact.artifact_id
-                        || binding.artifact_digest != artifact.artifact_digest
-                        || binding.runtime_spec_digest != digest
-                })
+            || release.immutable_binding.as_ref().is_none_or(|binding| {
+                binding.project_id != release.project_id
+                    || binding.release_id != release.release_id
+                    || binding.revision != release.revision
+                    || binding.artifact_id != artifact.artifact_id
+                    || binding.artifact_digest != artifact.artifact_digest
+                    || binding.runtime_spec_digest != digest
+            })
         {
             return Err("marketplace_release_binding_invalid");
         }
@@ -325,11 +324,9 @@ impl MarketplaceReleaseStore {
         let capabilities = StorageCapabilities::node_local();
         marketplace_workloads::validate_continuity(&continuity_policy, &capabilities)?;
         let mut state = self.0.write();
-        if let Some(existing) = state
-            .workload_instances
-            .iter()
-            .find(|instance| instance.marketplace_workload_reference == workload.workload_handoff_id)
-        {
+        if let Some(existing) = state.workload_instances.iter().find(|instance| {
+            instance.marketplace_workload_reference == workload.workload_handoff_id
+        }) {
             return if existing.project_id == workload.project_id
                 && existing.release_id == workload.release_id
                 && existing.revision == workload.revision
@@ -390,6 +387,9 @@ impl MarketplaceReleaseStore {
         revision: String,
         buyer_tenant: String,
     ) -> Result<MarketplaceWorkload, &'static str> {
+        // Validate the immutable executable before recording any handoff. A
+        // failed activation must not leave a paid workload half-attached.
+        self.executable_release(&release_id)?;
         let workload = self.attach(MarketplaceWorkload {
             workload_handoff_id,
             allocation_id,
@@ -838,12 +838,10 @@ async fn create_release(
     }
     let executable = match (request.artifact, request.minecraft_runtime_spec) {
         (Some(artifact), Some(spec)) => {
-            marketplace_workloads::validate_artifact(&artifact).map_err(|code| {
-                (axum::http::StatusCode::BAD_REQUEST, code.into())
-            })?;
-            marketplace_workloads::validate_minecraft_spec(&spec, &artifact).map_err(|code| {
-                (axum::http::StatusCode::BAD_REQUEST, code.into())
-            })?;
+            marketplace_workloads::validate_artifact(&artifact)
+                .map_err(|code| (axum::http::StatusCode::BAD_REQUEST, code.into()))?;
+            marketplace_workloads::validate_minecraft_spec(&spec, &artifact)
+                .map_err(|code| (axum::http::StatusCode::BAD_REQUEST, code.into()))?;
             let digest = marketplace_workloads::digest_runtime_spec(&spec).map_err(|_| {
                 (
                     axum::http::StatusCode::BAD_REQUEST,
@@ -861,14 +859,17 @@ async fn create_release(
         }
     };
     let release_id = format!("rel_{}", Uuid::new_v4().simple());
-    let immutable_binding = executable.as_ref().map(|(artifact, _, digest)| ReleaseArtifactBinding {
-        project_id: project.clone(),
-        release_id: release_id.clone(),
-        revision: request.revision.clone(),
-        artifact_id: artifact.artifact_id.clone(),
-        artifact_digest: artifact.artifact_digest.clone(),
-        runtime_spec_digest: digest.clone(),
-    });
+    let immutable_binding =
+        executable
+            .as_ref()
+            .map(|(artifact, _, digest)| ReleaseArtifactBinding {
+                project_id: project.clone(),
+                release_id: release_id.clone(),
+                revision: request.revision.clone(),
+                artifact_id: artifact.artifact_id.clone(),
+                artifact_digest: artifact.artifact_digest.clone(),
+                runtime_spec_digest: digest.clone(),
+            });
     let release = ProjectRelease {
         release_id,
         project_id: project,
@@ -938,6 +939,10 @@ async fn attach_workload(
             "marketplace_release_mismatch".into(),
         ));
     }
+    cloud
+        .marketplace_releases
+        .executable_release(&request.release_id)
+        .map_err(|code| (axum::http::StatusCode::CONFLICT, code.into()))?;
     if request.client_certificate_delivery_requested
         && !release
             .workload_client_certificate

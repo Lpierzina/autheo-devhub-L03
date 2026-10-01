@@ -230,7 +230,10 @@ pub fn validate_minecraft_spec(
     {
         return Err("marketplace_minecraft_runtime_spec_invalid");
     }
-    let port = spec.ports.iter().find(|port| port.name == spec.health.port_name);
+    let port = spec
+        .ports
+        .iter()
+        .find(|port| port.name == spec.health.port_name);
     if port.is_none_or(|port| port.protocol != "tcp" || port.port == 0) {
         return Err("marketplace_minecraft_runtime_spec_invalid");
     }
