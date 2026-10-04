@@ -153,11 +153,19 @@ impl MarketplaceSecurityStore {
             .and_then(|id| state.payment_intents.get(id))
             .cloned())
     }
-    fn put_intent(&self, key: String, body_digest: String, intent: PaymentIntent) -> PaymentIntent {
+    fn put_intent(
+        &self,
+        key: String,
+        body_digest: String,
+        intent: PaymentIntent,
+    ) -> Result<PaymentIntent, ()> {
         let mut state = self.0.write();
         if let Some(id) = state.payment_idempotency.get(&key) {
             if let Some(old) = state.payment_intents.get(id) {
-                return old.clone();
+                return match state.payment_idempotency_digests.get(&key) {
+                    Some(existing_digest) if existing_digest != &body_digest => Err(()),
+                    _ => Ok(old.clone()),
+                };
             }
         }
         state
@@ -167,7 +175,7 @@ impl MarketplaceSecurityStore {
         state
             .payment_intents
             .insert(intent.payment_intent_id.clone(), intent.clone());
-        intent
+        Ok(intent)
     }
     fn intent(&self, id: &str) -> Option<PaymentIntent> {
         self.0.read().payment_intents.get(id).cloned()
@@ -202,12 +210,20 @@ impl MarketplaceSecurityStore {
         }
         Ok(Some(allocation_id.clone()))
     }
-    fn bind_allocation_key(&self, key: String, body_digest: String, id: String) {
+    fn bind_allocation_key(&self, key: String, body_digest: String, id: String) -> Result<(), ()> {
         let mut state = self.0.write();
+        if let Some(existing_id) = state.allocation_idempotency.get(&key) {
+            return match state.allocation_idempotency_digests.get(&key) {
+                Some(existing_digest) if existing_digest != &body_digest => Err(()),
+                _ if existing_id == &id => Ok(()),
+                _ => Err(()),
+            };
+        }
         state.allocation_idempotency.insert(key.clone(), id);
         state
             .allocation_idempotency_digests
             .insert(key, body_digest);
+        Ok(())
     }
 }
 
@@ -1326,7 +1342,13 @@ async fn create_payment_intent(
     };
     let intent = cloud
         .marketplace_security
-        .put_intent(key, body_digest, intent);
+        .put_intent(key, body_digest, intent)
+        .map_err(|_| {
+            error(
+                axum::http::StatusCode::CONFLICT,
+                "payment_idempotency_conflict",
+            )
+        })?;
     crate::persist::persist(&cloud);
     Ok(Json(payment_intent_response(&intent)))
 }
@@ -1882,11 +1904,15 @@ async fn submit_allocation(
             return Ok(Json(allocation_receipt(&old)));
         }
     };
-    cloud.marketplace_security.bind_allocation_key(
-        key,
-        body_digest,
-        allocation.allocation_id.clone(),
-    );
+    cloud
+        .marketplace_security
+        .bind_allocation_key(key, body_digest, allocation.allocation_id.clone())
+        .map_err(|_| {
+            error(
+                axum::http::StatusCode::CONFLICT,
+                "allocation_idempotency_conflict",
+            )
+        })?;
     if let Some(workload_order_id) = allocation.workload_order_id.clone() {
         cloud
             .marketplace_releases
