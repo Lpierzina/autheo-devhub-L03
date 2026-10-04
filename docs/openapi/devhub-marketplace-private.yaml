@@ -5,8 +5,10 @@ info:
   description: |
     **PRIVATE_SERVICE_TO_SERVICE.** This is the Marketplace-to-DevHub integration
     implemented by `hive-cloud`. It is not a browser API and is not an L0 mesh
-    API. Marketplace talks only to DevHub through the four routes below;
-    DevHub owns Hive scheduling.
+    API. The legacy settlement flow has four routes below. The separately
+    versioned v2 workload-intent route validates only and fails closed until
+    DevHub can independently verify commercial/network authorization and make
+    an atomic capacity reservation.
 
     Deployment expectation: expose this only to the Marketplace service over a
     private, authenticated service path. Documentation does not authorize a
@@ -130,6 +132,27 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/InvalidSignature'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /v1/marketplace/workload-intents/v2:
+    post:
+      operationId: validateMarketplaceWorkloadIntentV2
+      summary: Validate a future authoritative workload-intent contract
+      x-autheo-security-classification: PRIVATE_SERVICE_TO_SERVICE
+      description: |
+        This route parses only `contract_version:
+        marketplace-workload-v2` and rejects unknown fields, provider/node
+        selection, executable locations, secrets, storage placement, and
+        backup placement. It currently returns
+        `marketplace_authorization_evidence_unavailable` after structural
+        validation. It does not reserve capacity, select a candidate, or
+        launch a workload. The authoritative contract and required
+        Marketplace evidence are in
+        `docs/marketplace-authoritative-scheduling-v2.md`.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/InvalidSignature'}
+        '403': {$ref: '#/components/responses/Conflict'}
+        '503': {description: '`marketplace_authorization_evidence_unavailable`; no placement was granted'}
 components:
   securitySchemes:
     marketplaceHmac:
@@ -150,8 +173,9 @@ components:
         `METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + SHA256_HEX(BODY)`.
         GET signs the SHA-256 of an empty body. The timestamp is Unix
         milliseconds and must be within 300000 ms of DevHub's clock. The nonce
-        (1–128 characters) is durable, scoped by `key-id:nonce`, single-use for
-        600000 ms, and persisted only after all header, digest, timestamp, and
+        is exactly 32 cryptographically random bytes, lowercase or uppercase
+        hex encoded (64 characters), durable, scoped by `key-id:nonce`,
+        single-use for 600000 ms, and persisted only after all header, digest, timestamp, and
         signature validation succeeds. Digest/signature failure,
         missing/malformed headers, unknown keys, and clock expiry are rejected;
         a reused nonce is HTTP 409.
@@ -385,7 +409,14 @@ components:
       type: object
       additionalProperties: false
       required: [event_id, event_version, workload_order_id, buyer_tenant_id, allocation_id, lifecycle_status, occurred_at, reason_code]
-      description: Retries retain an immutable event_id and body. The callback uses the same POST HMAC canonicalization, timestamp window, and nonce protection as Marketplace requests.
+      description: |
+        Retries retain an immutable event_id and body. DevHub callbacks use
+        `X-DevHub-Key-Id`, `X-DevHub-Timestamp`, `X-DevHub-Nonce`,
+        `X-DevHub-Content-SHA256`, and `X-DevHub-Signature`. The exact UTF-8
+        canonical input is
+        `METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + KEY_ID + "\n" + SHA256_HEX(BODY)`.
+        This directional callback key namespace is separate from inbound
+        Marketplace request keys.
       properties:
         event_id: {type: string}
         event_version: {type: integer, const: 1}
