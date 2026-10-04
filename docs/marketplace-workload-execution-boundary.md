@@ -1,6 +1,6 @@
 # Marketplace workload execution boundary
 
-Marketplace submits only a signed commercial workload intent to
+Marketplace submits the transitional signed commercial workload intent to
 `POST /v1/marketplace/workloads`. The request is HMAC-authenticated by the
 existing private Marketplace gateway and must contain exactly:
 
@@ -43,21 +43,30 @@ shutdown, startup timeout, allowed environment names, and internal secret
 selectors. Secret values are never stored in the release or received from
 Marketplace.
 
+The Phase 4B v2 parser is separately available at
+`POST /v1/marketplace/workload-intents/v2`. Its compatibility matrix and
+required Marketplace authorization evidence are documented in
+[`marketplace-authoritative-scheduling-v2.md`](marketplace-authoritative-scheduling-v2.md).
+It validates a strict outcome-based request shape and fails closed because
+DevHub does not yet have a trusted commercial/network authorization service or
+a transactional distributed capacity reservation substrate.
+
 ## Current safe behavior
 
-The platform currently has no DevHub-wide immutable artifact catalog that can
-resolve a Marketplace release to stored executable bytes. Existing
-`source_identity` is source/build provenance only, not executable authority.
-Consequently source-only releases return
-`release_executable_artifact_unavailable`; DevHub does not create a workload
-instance, schedule a node, or report a deployment as started.
+DevHub has a replicated catalog of approved sealed runtime-artifact
+descriptors, immutable release bindings, SHA-256 and semantic-package
+verification, and authenticated Iroh materialization between trusted nodes.
+Existing `source_identity` remains source/build provenance only, not executable
+authority. A source-only release returns
+`release_executable_artifact_unavailable`.
 
-When executable resolution becomes available, a successful request creates a
-durable `workload_instance_id` independent of compute allocation. It records
-the commercial order, tenant, exact release binding, artifact/runtime digests,
-lifecycle state, primary allocation, persistent storage identity, and
-continuity policy. The opaque receipt and retry-safe signed callback expose no
-provider or node topology.
+The transitional request can create a durable `workload_instance_id`
+independent of compute allocation. It records the commercial order, tenant,
+exact release binding, artifact/runtime digests, lifecycle state, primary
+allocation, persistent storage identity, and continuity policy. The opaque
+receipt and retry-safe signed callback expose no provider or node topology.
+This is not authoritative v2 placement: the legacy allocation still carries a
+Marketplace-selected deployment and no atomic distributed reservation exists.
 
 ## Continuity and failover status
 

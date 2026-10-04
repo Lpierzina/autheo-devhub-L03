@@ -19,6 +19,7 @@ DevHub currently exposes this private, service-to-service API:
 | `POST` | `/v1/marketplace/payment-intents` | Create an immutable THEO settlement intent for a selected advertisement. |
 | `POST` | `/v1/marketplace/payments/verify` | Ask DevHub to verify the on-chain receipt against that immutable intent. |
 | `POST` | `/v1/marketplace/l0/allocations` | Submit a **DevHub-verified** settlement for constrained scheduling admission. |
+| `POST` | `/v1/marketplace/workload-intents/v2` | Strictly validate the future authoritative intent shape; currently fails closed and grants no placement. |
 
 The machine-readable schema is
 [`docs/openapi/devhub-marketplace-private.yaml`](../openapi/devhub-marketplace-private.yaml).
@@ -80,17 +81,19 @@ credential.
 
 ### Buyer-controlled DevHub flow
 
-Project, immutable-release, and workload attachment remain DevHub
-user-authorized operations:
+Project and immutable-release creation remain DevHub user-authorized
+operations:
 
 | Method | Route | Authority |
 | --- | --- | --- |
 | `POST` | `/v1/projects/{project}/marketplace-releases` | Authenticated DevHub project owner |
-| `POST` | `/v1/projects/{project}/marketplace-workloads` | Authenticated DevHub project owner |
 
 Marketplace may direct the buyer to DevHub, but must not use a browser-supplied
-project or release ID as proof of ownership. DevHub validates project tenant,
-allocation tenant, release publication, and release revision during attachment.
+project or release ID as proof of ownership. The documented
+`/v1/projects/{project}/marketplace-workloads` route is not registered and
+must not be called. Current server-to-server workload handling validates
+project tenant, release publication, and revision through the Marketplace
+boundary only.
 Marketplace receives no deployment credential, database credential, private
 node address, mesh identity, or runtime routing material.
 
@@ -156,19 +159,28 @@ consumer expectations are documented in
 
 ## Callback receiver: future Marketplace work
 
-Do not add a callback receiver as a live operational path until DevHub sends
-callbacks. When DevHub implements it, Marketplace will need:
+DevHub's durable outbox sends callbacks only when its operator has configured
+`HIVE_MARKETPLACE_EVENT_URL`, `HIVE_MARKETPLACE_EVENT_KEY_ID`, and a matching
+directional key in `HIVE_DEVHUB_EVENT_HMAC_KEYS`. Marketplace's receiver must
+not treat a callback as operational authority until the missing reservation and
+ordered lifecycle contract is implemented. The receiver route is Marketplace
+owned:
 
 ```text
 POST /v1/marketplace/internal/devhub/events
 ```
 
-The receiver must use a callback key namespace distinct from the inbound
-Marketplace-to-DevHub signing secret. It must verify the exact transmitted
-body digest, method, canonical callback path, key ID, timestamp, nonce, and
-signature; enforce a five-minute timestamp window; persist nonce and event-ID
-replay facts; enforce allocation-scoped sequence rules; and acknowledge only
-after its durable transaction completes.
+The receiver must verify `X-DevHub-Key-Id`, `X-DevHub-Timestamp`,
+`X-DevHub-Nonce`, `X-DevHub-Content-SHA256`, and `X-DevHub-Signature` using:
+
+```text
+METHOD\nPATH\nTIMESTAMP\nNONCE\nKEY_ID\nSHA256_HEX(BODY)
+```
+
+It must use a callback key namespace distinct from inbound Marketplace request
+keys; enforce a five-minute timestamp window; persist nonce and event-ID replay
+facts; enforce allocation-scoped sequence rules once DevHub emits them; and
+acknowledge only after its durable transaction completes.
 
 Until that API exists, no Marketplace callback URL, callback secret, or
 callback-processing success state should be stored as proof of an operational

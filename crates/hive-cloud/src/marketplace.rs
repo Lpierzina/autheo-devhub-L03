@@ -7,19 +7,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::State,
     http::HeaderMap,
     middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
-    Router,
 };
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 use tower::ServiceExt;
@@ -92,12 +92,19 @@ pub struct MarketplaceSecuritySnapshot {
     payment_intents: BTreeMap<String, PaymentIntent>,
     #[serde(default)]
     payment_idempotency: BTreeMap<String, String>,
+    /// Body digests bind a logical idempotency key to one request. Older
+    /// snapshots lack these facts, so only newly created operations receive
+    /// the stronger conflicting-reuse protection.
+    #[serde(default)]
+    payment_idempotency_digests: BTreeMap<String, String>,
     /// Settlement-key ownership is independent of business order reference.
     /// It prevents the same V2 on-chain settlement from verifying two intents.
     #[serde(default)]
     verified_settlement_keys: BTreeMap<String, String>,
     #[serde(default)]
     allocation_idempotency: BTreeMap<String, String>,
+    #[serde(default)]
+    allocation_idempotency_digests: BTreeMap<String, String>,
 }
 
 #[derive(Default)]
@@ -130,28 +137,45 @@ impl MarketplaceSecurityStore {
     fn deployment(&self, id: &str) -> Option<ListedDeployment> {
         self.0.read().deployments.get(id).cloned()
     }
-    fn intent_for_key(&self, key: &str) -> Option<PaymentIntent> {
+    fn intent_for_key(&self, key: &str, body_digest: &str) -> Result<Option<PaymentIntent>, ()> {
         let state = self.0.read();
-        state
+        let Some(id) = state.payment_idempotency.get(key) else {
+            return Ok(None);
+        };
+        if let Some(existing_digest) = state.payment_idempotency_digests.get(key) {
+            if existing_digest != body_digest {
+                return Err(());
+            }
+        }
+        Ok(state
             .payment_idempotency
             .get(key)
             .and_then(|id| state.payment_intents.get(id))
-            .cloned()
+            .cloned())
     }
-    fn put_intent(&self, key: String, intent: PaymentIntent) -> PaymentIntent {
+    fn put_intent(
+        &self,
+        key: String,
+        body_digest: String,
+        intent: PaymentIntent,
+    ) -> Result<PaymentIntent, ()> {
         let mut state = self.0.write();
         if let Some(id) = state.payment_idempotency.get(&key) {
             if let Some(old) = state.payment_intents.get(id) {
-                return old.clone();
+                return match state.payment_idempotency_digests.get(&key) {
+                    Some(existing_digest) if existing_digest != &body_digest => Err(()),
+                    _ => Ok(old.clone()),
+                };
             }
         }
         state
             .payment_idempotency
-            .insert(key, intent.payment_intent_id.clone());
+            .insert(key.clone(), intent.payment_intent_id.clone());
+        state.payment_idempotency_digests.insert(key, body_digest);
         state
             .payment_intents
             .insert(intent.payment_intent_id.clone(), intent.clone());
-        intent
+        Ok(intent)
     }
     fn intent(&self, id: &str) -> Option<PaymentIntent> {
         self.0.read().payment_intents.get(id).cloned()
@@ -174,11 +198,32 @@ impl MarketplaceSecurityStore {
             }
         }
     }
-    fn allocation_for_key(&self, key: &str) -> Option<String> {
-        self.0.read().allocation_idempotency.get(key).cloned()
+    fn allocation_for_key(&self, key: &str, body_digest: &str) -> Result<Option<String>, ()> {
+        let state = self.0.read();
+        let Some(allocation_id) = state.allocation_idempotency.get(key) else {
+            return Ok(None);
+        };
+        if let Some(existing_digest) = state.allocation_idempotency_digests.get(key) {
+            if existing_digest != body_digest {
+                return Err(());
+            }
+        }
+        Ok(Some(allocation_id.clone()))
     }
-    fn bind_allocation_key(&self, key: String, id: String) {
-        self.0.write().allocation_idempotency.insert(key, id);
+    fn bind_allocation_key(&self, key: String, body_digest: String, id: String) -> Result<(), ()> {
+        let mut state = self.0.write();
+        if let Some(existing_id) = state.allocation_idempotency.get(&key) {
+            return match state.allocation_idempotency_digests.get(&key) {
+                Some(existing_digest) if existing_digest != &body_digest => Err(()),
+                _ if existing_id == &id => Ok(()),
+                _ => Err(()),
+            };
+        }
+        state.allocation_idempotency.insert(key.clone(), id);
+        state
+            .allocation_idempotency_digests
+            .insert(key, body_digest);
+        Ok(())
     }
 }
 
@@ -554,6 +599,75 @@ struct WorkloadContinuityPolicy {
     recovery_time_objective_seconds: u64,
 }
 
+/// Phase 4B contract parser only. This endpoint deliberately does not assign
+/// capacity until DevHub has a Marketplace-backed, independently verifiable
+/// commercial-policy and network-authorization authority.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadIntentV2Request {
+    contract_version: String,
+    workload_order_id: String,
+    buyer_tenant_id: String,
+    idempotency_key: String,
+    project_id: String,
+    release_id: String,
+    revision: String,
+    commercial_authorization_ref: String,
+    commercial_term: CommercialTerm,
+    workload: WorkloadSpecV2,
+    policy: WorkloadPolicyV2,
+    placement: WorkloadPlacementV2,
+    continuity_policy: WorkloadContinuityPolicy,
+    /// This is deliberately a structured claim rather than an asserted tier
+    /// number. It remains insufficient until its Marketplace issuer, key
+    /// rotation, revocation and freshness lookup are configured in DevHub.
+    commercial_authorization: CommercialAuthorizationV2,
+    #[serde(default)]
+    preferred_network_authorization: Option<PreferredNetworkAuthorizationV2>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadSpecV2 {
+    template: String,
+    workload_class: String,
+    capacity_requirements: WorkloadCapacityRequirements,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadPolicyV2 {
+    scheduling_policy_version: String,
+    commercial_policy_version: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadPlacementV2 {
+    mode: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommercialAuthorizationV2 {
+    issuer: String,
+    authorization_id: String,
+    policy_version: String,
+    issued_at: String,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreferredNetworkAuthorizationV2 {
+    network_id: String,
+    membership_revision: String,
+    issuer: String,
+    authorization_id: String,
+    issued_at: String,
+    expires_at: String,
+}
+
 /// All Marketplace service routes live beneath this router-level HMAC gate.
 /// Keeping the gate here makes adding a route to `/v1/marketplace/*` through
 /// this module safe by default: handlers receive the original raw bytes only
@@ -568,6 +682,10 @@ pub fn routes(cloud: Arc<CloudState>) -> Router {
         .route("/v1/marketplace/payments/verify", post(verify_payment))
         .route("/v1/marketplace/l0/allocations", post(submit_allocation))
         .route("/v1/marketplace/workloads", post(submit_workload_intent))
+        .route(
+            "/v1/marketplace/workload-intents/v2",
+            post(validate_workload_intent_v2),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             cloud.clone(),
             verify_marketplace_hmac,
@@ -866,6 +984,17 @@ fn hmac_secret(key_id: &str) -> Option<String> {
         .find_map(|(id, secret)| (id == key_id && !secret.is_empty()).then(|| secret.to_owned()))
 }
 
+/// DevHub callback keys are directional and intentionally separate from the
+/// Marketplace-to-DevHub request keys. Multiple comma-separated key ids allow
+/// overlap during rotation without accepting an unrecognised sender key.
+fn devhub_event_secret(key_id: &str) -> Option<String> {
+    std::env::var("HIVE_DEVHUB_EVENT_HMAC_KEYS")
+        .ok()?
+        .split(',')
+        .filter_map(|entry| entry.split_once(':'))
+        .find_map(|(id, secret)| (id == key_id && !secret.is_empty()).then(|| secret.to_owned()))
+}
+
 fn verify_marketplace_request(
     cloud: &Arc<CloudState>,
     method: &str,
@@ -897,7 +1026,7 @@ fn verify_marketplace_request(
             )
         })?;
     let nonce = header("x-marketplace-nonce")
-        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .filter(|value| valid_marketplace_nonce(value))
         .ok_or_else(|| {
             error(
                 axum::http::StatusCode::UNAUTHORIZED,
@@ -996,6 +1125,13 @@ fn idempotency_key(headers: &HeaderMap) -> Result<String, MarketplaceError> {
                 "missing_idempotency_key",
             )
         })
+}
+
+fn valid_marketplace_nonce(value: &str) -> bool {
+    // Marketplace's protocol calls for 32 random bytes hex-encoded. Rejecting
+    // any other shape prevents a low-entropy or ambiguously encoded replay key
+    // from reaching the durable replay store.
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn listed_deployments(cloud: &CloudState) -> Vec<ListedDeployment> {
@@ -1122,7 +1258,17 @@ async fn create_payment_intent(
     body: Bytes,
 ) -> ApiResult<Value> {
     let key = idempotency_key(&headers)?;
-    if let Some(intent) = cloud.marketplace_security.intent_for_key(&key) {
+    let body_digest = hex::encode(Sha256::digest(&body));
+    if let Some(intent) = cloud
+        .marketplace_security
+        .intent_for_key(&key, &body_digest)
+        .map_err(|_| {
+            error(
+                axum::http::StatusCode::CONFLICT,
+                "payment_idempotency_conflict",
+            )
+        })?
+    {
         return Ok(Json(payment_intent_response(&intent)));
     }
     let request: PaymentIntentRequest = serde_json::from_slice(&body)
@@ -1194,7 +1340,15 @@ async fn create_payment_intent(
         settlement_key: Some(settlement_key),
         settlement_event_log_index: None,
     };
-    let intent = cloud.marketplace_security.put_intent(key, intent);
+    let intent = cloud
+        .marketplace_security
+        .put_intent(key, body_digest, intent)
+        .map_err(|_| {
+            error(
+                axum::http::StatusCode::CONFLICT,
+                "payment_idempotency_conflict",
+            )
+        })?;
     crate::persist::persist(&cloud);
     Ok(Json(payment_intent_response(&intent)))
 }
@@ -1553,7 +1707,17 @@ async fn submit_allocation(
     body: Bytes,
 ) -> ApiResult<Value> {
     let key = idempotency_key(&headers)?;
-    if let Some(id) = cloud.marketplace_security.allocation_for_key(&key) {
+    let body_digest = hex::encode(Sha256::digest(&body));
+    if let Some(id) = cloud
+        .marketplace_security
+        .allocation_for_key(&key, &body_digest)
+        .map_err(|_| {
+            error(
+                axum::http::StatusCode::CONFLICT,
+                "allocation_idempotency_conflict",
+            )
+        })?
+    {
         if let Some(allocation) = cloud.marketplace_allocations.get(&id) {
             return Ok(Json(allocation_receipt(&allocation)));
         }
@@ -1742,7 +1906,13 @@ async fn submit_allocation(
     };
     cloud
         .marketplace_security
-        .bind_allocation_key(key, allocation.allocation_id.clone());
+        .bind_allocation_key(key, body_digest, allocation.allocation_id.clone())
+        .map_err(|_| {
+            error(
+                axum::http::StatusCode::CONFLICT,
+                "allocation_idempotency_conflict",
+            )
+        })?;
     if let Some(workload_order_id) = allocation.workload_order_id.clone() {
         cloud
             .marketplace_releases
@@ -1887,6 +2057,113 @@ async fn submit_workload_intent(
     })))
 }
 
+/// Validate the versioned, outcome-based request shape without granting
+/// placement. This is intentionally a fail-closed integration boundary:
+/// signed request authentication proves the caller is Marketplace, but it
+/// cannot prove that a referenced commercial policy, provider qualification,
+/// stake observation, buyer network membership, or revocation state remains
+/// current. DevHub must obtain those facts from a separate trusted authority.
+async fn validate_workload_intent_v2(
+    State(cloud): State<Arc<CloudState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Value> {
+    let header_key = idempotency_key(&headers)?;
+    let request: WorkloadIntentV2Request = serde_json::from_slice(&body).map_err(|_| {
+        error(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_workload_intent_v2",
+        )
+    })?;
+    if request.contract_version != "marketplace-workload-v2"
+        || request.idempotency_key != header_key
+        || !valid_workload_identifier(&request.workload_order_id)
+        || !valid_workload_identifier(&request.buyer_tenant_id)
+        || !valid_workload_identifier(&request.project_id)
+        || !valid_workload_identifier(&request.release_id)
+        || !valid_workload_identifier(&request.revision)
+        || !valid_workload_identifier(&request.commercial_authorization_ref)
+        || !valid_workload_spec_v2(&request.workload)
+        || !valid_workload_policy_v2(&request.policy)
+        || !valid_commercial_authorization_v2(&request.commercial_authorization)
+        || !valid_term(&request.commercial_term)
+        || request.continuity_policy.mode != "none"
+        || request.continuity_policy.recovery_point_objective_seconds
+            > MAX_CONTINUITY_OBJECTIVE_SECONDS
+        || request.continuity_policy.recovery_time_objective_seconds
+            > MAX_CONTINUITY_OBJECTIVE_SECONDS
+        || !valid_placement_v2(
+            &request.placement,
+            request.preferred_network_authorization.as_ref(),
+        )
+    {
+        return Err(error(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_workload_intent_v2",
+        ));
+    }
+    if cloud.projects.team_of(&request.project_id) != request.buyer_tenant_id {
+        return Err(error(
+            axum::http::StatusCode::FORBIDDEN,
+            "marketplace_buyer_mismatch",
+        ));
+    }
+    // Do not queue, reserve, attach, or launch anything here. Marketplace has
+    // not provided a trusted live authorization/revocation interface, and the
+    // replicated control plane's wholesale snapshots cannot safely implement
+    // a distributed compare-and-reserve transaction across nodes.
+    Err(error(
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "marketplace_authorization_evidence_unavailable",
+    ))
+}
+
+fn valid_workload_spec_v2(workload: &WorkloadSpecV2) -> bool {
+    workload.template == "minecraft"
+        && valid_workload_identifier(&workload.workload_class)
+        && workload.capacity_requirements.vcpu > 0
+        && workload.capacity_requirements.vcpu <= MAX_WORKLOAD_VCPU
+        && workload.capacity_requirements.memory_mib > 0
+        && workload.capacity_requirements.memory_mib <= MAX_WORKLOAD_MEMORY_MIB
+        && workload.capacity_requirements.storage_gib > 0
+        && workload.capacity_requirements.storage_gib <= MAX_WORKLOAD_STORAGE_GIB
+}
+
+fn valid_workload_policy_v2(policy: &WorkloadPolicyV2) -> bool {
+    valid_workload_identifier(&policy.scheduling_policy_version)
+        && valid_workload_identifier(&policy.commercial_policy_version)
+}
+
+fn valid_commercial_authorization_v2(authorization: &CommercialAuthorizationV2) -> bool {
+    valid_workload_identifier(&authorization.issuer)
+        && valid_workload_identifier(&authorization.authorization_id)
+        && valid_workload_identifier(&authorization.policy_version)
+        && valid_term(&CommercialTerm {
+            starts_at: authorization.issued_at.clone(),
+            ends_at: authorization.expires_at.clone(),
+        })
+}
+
+fn valid_placement_v2(
+    placement: &WorkloadPlacementV2,
+    network: Option<&PreferredNetworkAuthorizationV2>,
+) -> bool {
+    match placement.mode.as_str() {
+        "standard" => network.is_none(),
+        "preferred_network" => network.is_some_and(|authorization| {
+            valid_workload_identifier(&authorization.network_id)
+                && valid_workload_identifier(&authorization.membership_revision)
+                && valid_workload_identifier(&authorization.issuer)
+                && valid_workload_identifier(&authorization.authorization_id)
+                && valid_term(&CommercialTerm {
+                    starts_at: authorization.issued_at.clone(),
+                    ends_at: authorization.expires_at.clone(),
+                })
+        }),
+        _ => false,
+    }
+}
+
 fn valid_workload_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
@@ -1942,7 +2219,7 @@ async fn deliver_lifecycle_event(cloud: &CloudState, event: &MarketplaceLifecycl
     let Ok(key_id) = std::env::var("HIVE_MARKETPLACE_EVENT_KEY_ID") else {
         return false;
     };
-    let Some(secret) = hmac_secret(&key_id) else {
+    let Some(secret) = devhub_event_secret(&key_id) else {
         return false;
     };
     let Ok(body) = serde_json::to_vec(&json!({
@@ -1961,7 +2238,10 @@ async fn deliver_lifecycle_event(cloud: &CloudState, event: &MarketplaceLifecycl
     let nonce = Uuid::new_v4().simple().to_string();
     let path = parsed.path();
     let digest = hex::encode(Sha256::digest(&body));
-    let canonical = format!("POST\n{path}\n{timestamp}\n{nonce}\n{digest}");
+    // Marketplace's callback verifier includes the DevHub key id in the
+    // signed canonical input. Its omission would let a signed body be
+    // rebound to another accepted key id during rotation.
+    let canonical = format!("POST\n{path}\n{timestamp}\n{nonce}\n{key_id}\n{digest}");
     let mut mac =
         HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC supports all key sizes");
     mac.update(canonical.as_bytes());
@@ -1970,11 +2250,11 @@ async fn deliver_lifecycle_event(cloud: &CloudState, event: &MarketplaceLifecycl
         .http
         .post(url)
         .header("content-type", "application/json")
-        .header("x-marketplace-key-id", key_id)
-        .header("x-marketplace-timestamp", timestamp)
-        .header("x-marketplace-nonce", nonce)
-        .header("x-marketplace-content-sha256", digest)
-        .header("x-marketplace-signature", signature)
+        .header("x-devhub-key-id", key_id)
+        .header("x-devhub-timestamp", timestamp)
+        .header("x-devhub-nonce", nonce)
+        .header("x-devhub-content-sha256", digest)
+        .header("x-devhub-signature", signature)
         .body(body)
         .send()
         .await
@@ -1994,7 +2274,7 @@ fn lifecycle_event_delivery_configured() -> bool {
     std::env::var("HIVE_MARKETPLACE_EVENT_KEY_ID")
         .ok()
         .filter(|key_id| !key_id.is_empty())
-        .and_then(|key_id| hmac_secret(&key_id))
+        .and_then(|key_id| devhub_event_secret(&key_id))
         .is_some()
 }
 

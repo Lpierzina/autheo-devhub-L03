@@ -18,7 +18,8 @@ HIVE_MARKETPLACE_TESTNET_FEE_RECIPIENT=<0x-address>
 HIVE_MARKETPLACE_TESTNET_ATOMIC_SPLIT_AUDITED=1
 HIVE_MARKETPLACE_TESTNET_CONFIGURATION_REFERENCE=<approved V2 configuration reference>
 HIVE_MARKETPLACE_EVENT_URL=<operator-provisioned https callback URL>
-HIVE_MARKETPLACE_EVENT_KEY_ID=<key id from HIVE_MARKETPLACE_HMAC_KEYS>
+HIVE_MARKETPLACE_EVENT_KEY_ID=<DevHub callback key id>
+HIVE_DEVHUB_EVENT_HMAC_KEYS=<key-id>:<secret>[,<key-id>:<secret>...]
 ```
 
 `HIVE_MARKETPLACE_TESTNET_ATOMIC_SPLIT_AUDITED` is an explicit deployment
@@ -46,11 +47,18 @@ signature in `X-Marketplace-Key-Id`, `X-Marketplace-Timestamp`,
 Nonces are durable and single-use; secrets, headers, and bodies must not be
 logged.
 
-For allocation-bound workload handoffs, `HIVE_MARKETPLACE_EVENT_URL` and
-`HIVE_MARKETPLACE_EVENT_KEY_ID` are also required. DevHub rejects the handoff
-when that signed delivery path is not configured, rather than accepting work
-that Marketplace would need to advance by polling. The callback URL is
-operator configuration, never an order or browser field.
+For allocation-bound workload handoffs, `HIVE_MARKETPLACE_EVENT_URL`,
+`HIVE_MARKETPLACE_EVENT_KEY_ID`, and `HIVE_DEVHUB_EVENT_HMAC_KEYS` are also
+required. DevHub rejects the handoff when that signed delivery path is not
+configured, rather than accepting work that Marketplace would need to advance
+by polling. The callback URL is operator configuration, never an order or
+browser field. Callback signing is directional: DevHub sends
+`X-DevHub-Key-Id`, `X-DevHub-Timestamp`, `X-DevHub-Nonce`,
+`X-DevHub-Content-SHA256`, and `X-DevHub-Signature` over:
+
+```text
+POST\nPATH\nTIMESTAMP\nNONCE\nKEY_ID\nSHA256_HEX(BODY)
+```
 
 ## Settlement and allocation
 
