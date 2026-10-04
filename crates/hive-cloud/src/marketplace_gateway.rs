@@ -55,6 +55,7 @@ fn allowed_path(path: &str) -> bool {
             | "/v1/marketplace/payments/verify"
             | "/v1/marketplace/l0/allocations"
             | "/v1/marketplace/workloads"
+            | "/v1/marketplace/workload-intents/v2"
     )
 }
 
@@ -202,6 +203,7 @@ fn routes(cloud: Arc<CloudState>) -> Router {
         .route("/v1/marketplace/payments/verify", post(gateway_request))
         .route("/v1/marketplace/l0/allocations", post(gateway_request))
         .route("/v1/marketplace/workloads", post(gateway_request))
+        .route("/v1/marketplace/workload-intents/v2", post(gateway_request))
         .with_state(cloud)
 }
 
