@@ -145,6 +145,7 @@ dav-server = { version = "0.11.0", default-features = false }
 # the upload path and would pull extra native code.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha3 = "0.10.9"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 [features]
 # `zkauth` is DEFAULT-ON: it implements preview-deployment access protection

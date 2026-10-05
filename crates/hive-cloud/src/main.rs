@@ -8,8 +8,8 @@
 mod acme;
 mod admin;
 mod apikeys;
-mod artifact_catalog_transfer;
 mod app_discovery;
+mod artifact_catalog_transfer;
 mod audit;
 mod auth;
 mod billing;
@@ -61,10 +61,10 @@ mod integrity_signer;
 mod lease;
 mod listener_audit;
 mod marketplace;
+mod marketplace_authorization;
 mod marketplace_gateway;
 mod marketplace_migrations;
 mod marketplace_releases;
-mod minecraft_executor;
 mod memwatch;
 mod mesh_raw;
 mod mesh_shell;
@@ -72,6 +72,7 @@ mod meshwatch;
 mod metrics;
 mod microfrontends;
 mod microfrontends_api;
+mod minecraft_executor;
 mod notifications;
 mod persist;
 mod production_deployments;
@@ -128,15 +129,15 @@ use std::time::Duration;
 use clap::Parser;
 use fluid_compute::{Fluid, FluidConfig};
 use fluid_gateway::Gateway;
+use hive_backend::CellBackend;
 use hive_backend::firecracker::{FirecrackerBackend, FirecrackerConfig};
 use hive_backend::litebox::LiteboxBackend;
 use hive_backend::mock::{MockBackend, MockConfig};
-use hive_backend::CellBackend;
 use hive_controlplane::{BoxConfig, Hive, HiveConfig};
 use hive_core::now_ms;
 use hive_edge::{
-    workflows::WorkflowStep, BotManager, CdnCache, ConcurrencyLimiter, CronScheduler, NodeInfo,
-    NodeRegistry, Plan, Router, Waf, WorkflowEngine,
+    BotManager, CdnCache, ConcurrencyLimiter, CronScheduler, NodeInfo, NodeRegistry, Plan, Router,
+    Waf, WorkflowEngine, workflows::WorkflowStep,
 };
 
 use state::CloudState;
@@ -640,11 +641,17 @@ async fn async_main() -> anyhow::Result<()> {
         (litebox, "litebox", litebox_runtime_capabilities)
     } else {
         if force_mock && !litebox_verified {
-            tracing::warn!("isolation backend: MockBackend (HIVE_FORCE_MOCK=1, no verified Litebox) — runtime is mocked for local development");
+            tracing::warn!(
+                "isolation backend: MockBackend (HIVE_FORCE_MOCK=1, no verified Litebox) — runtime is mocked for local development"
+            );
         } else if force_mock {
-            tracing::warn!("isolation backend: MockBackend (HIVE_FORCE_MOCK=1) — Litebox verified but its runner binary is missing on this host (Tier 1 check failed)");
+            tracing::warn!(
+                "isolation backend: MockBackend (HIVE_FORCE_MOCK=1) — Litebox verified but its runner binary is missing on this host (Tier 1 check failed)"
+            );
         } else {
-            tracing::warn!("isolation backend: MockBackend (sandboxed child process) — real microVMs need Linux + /dev/kvm; this is expected for local dev. ALL OTHER subsystems run for real.");
+            tracing::warn!(
+                "isolation backend: MockBackend (sandboxed child process) — real microVMs need Linux + /dev/kvm; this is expected for local dev. ALL OTHER subsystems run for real."
+            );
         }
         (
             Arc::new(MockBackend::new(MockConfig {
@@ -1266,7 +1273,10 @@ async fn async_main() -> anyhow::Result<()> {
             }
             let grace = Duration::from_secs(env_u64("HIVE_SHUTDOWN_GRACE_SECS", 15));
             if let Some(handle) = SHUTDOWN_HTTPS_HANDLE.get() {
-                tracing::info!(?grace, "shutdown requested → draining public listener (in-flight requests + cell tunnels)");
+                tracing::info!(
+                    ?grace,
+                    "shutdown requested → draining public listener (in-flight requests + cell tunnels)"
+                );
                 handle.graceful_shutdown(Some(grace));
                 // graceful_shutdown stops new connections and gives existing ones
                 // the grace window; wait for them here since exit() below would
@@ -2778,7 +2788,7 @@ async fn admin_forward_to_leader(
     let body = match axum::body::to_bytes(body, 32 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
-            return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response()
+            return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
         }
     };
     let path_q = parts
@@ -2790,7 +2800,7 @@ async fn admin_forward_to_leader(
     let method = match reqwest::Method::from_bytes(parts.method.as_str().as_bytes()) {
         Ok(m) => m,
         Err(_) => {
-            return (axum::http::StatusCode::METHOD_NOT_ALLOWED, "bad method").into_response()
+            return (axum::http::StatusCode::METHOD_NOT_ALLOWED, "bad method").into_response();
         }
     };
     let mut cp_epoch = cloud.cluster.epoch();
@@ -2910,7 +2920,7 @@ async fn admin_forward_to_leader(
                         axum::http::StatusCode::BAD_GATEWAY,
                         "control-plane leader forward failed",
                     )
-                        .into_response()
+                        .into_response();
                 }
             }
         }
@@ -2976,13 +2986,13 @@ async fn dashboard_proxy(
     let body = match axum::body::to_bytes(body, 32 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
-            return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response()
+            return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
         }
     };
     let method = match reqwest::Method::from_bytes(parts.method.as_str().as_bytes()) {
         Ok(m) => m,
         Err(_) => {
-            return (axum::http::StatusCode::METHOD_NOT_ALLOWED, "bad method").into_response()
+            return (axum::http::StatusCode::METHOD_NOT_ALLOWED, "bad method").into_response();
         }
     };
     let mut rb = http.request(method, &url).body(body.to_vec());
@@ -3124,7 +3134,9 @@ async fn serve_tls(app: axum::Router, addr: SocketAddr) -> anyhow::Result<()> {
             let certified = rcgen::generate_simple_self_signed(names)?;
             let cert_pem = certified.cert.pem();
             let key_pem = certified.key_pair.serialize_pem();
-            tracing::info!("TLS using generated self-signed certificate (dev; set HIVE_TLS_CERT/KEY for production)");
+            tracing::info!(
+                "TLS using generated self-signed certificate (dev; set HIVE_TLS_CERT/KEY for production)"
+            );
             RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes()).await?
         }
     };
@@ -5524,7 +5536,10 @@ fn spawn_health_loop(cloud: Arc<CloudState>) {
 
 #[cfg(test)]
 mod health_tests {
-    use super::health_decision;
+    use super::{health_decision, marketplace_authorization};
+    use chrono::{Duration, Utc};
+    use ed25519_dalek::{Signer, SigningKey};
+    use serde_json::json;
 
     #[test]
     fn threshold_prevents_single_probe_flapping() {
@@ -5547,5 +5562,174 @@ mod health_tests {
     fn threshold_one_flips_on_first_miss() {
         let (m, w) = health_decision(0, false, 1);
         assert_eq!((m, w), (1, Some(false)));
+    }
+
+    fn signed(
+        key: &SigningKey,
+        issuer: &str,
+        key_id: &str,
+        payload: serde_json::Value,
+    ) -> marketplace_authorization::SignedAuthorization {
+        let signature = key.sign(&marketplace_authorization::canonical_json(&payload));
+        marketplace_authorization::SignedAuthorization {
+            issuer: issuer.into(),
+            key_id: key_id.into(),
+            alg: "Ed25519".into(),
+            signature: base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                signature.to_bytes(),
+            ),
+            payload,
+        }
+    }
+
+    fn trust(
+        key: &SigningKey,
+        active_at: chrono::DateTime<Utc>,
+        expires_at: Option<chrono::DateTime<Utc>>,
+        revoked: bool,
+    ) -> marketplace_authorization::MarketplaceIssuerTrust {
+        marketplace_authorization::MarketplaceIssuerTrust::from_keys(
+            "marketplace",
+            vec![marketplace_authorization::MarketplaceIssuerTrust::test_key(
+                "marketplace",
+                "marketplace-2026-01",
+                key.verifying_key(),
+                active_at,
+                expires_at,
+                revoked,
+            )],
+        )
+    }
+
+    #[test]
+    fn marketplace_ed25519_verifier_accepts_sorted_nested_payloads() {
+        let now = Utc::now();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let payload = json!({"z":{"b":2,"a":1},"items":[{"z":1,"a":2},"first"],"message":"café"});
+        let verified = trust(&key, now - Duration::seconds(1), None, false)
+            .verify(
+                &signed(&key, "marketplace", "marketplace-2026-01", payload.clone()),
+                now,
+            )
+            .expect("valid Ed25519 signature");
+        assert_eq!(
+            String::from_utf8(verified.canonical_payload).expect("canonical JSON is UTF-8"),
+            r#"{"items":[{"a":2,"z":1},"first"],"message":"café","z":{"a":1,"b":2}}"#
+        );
+        assert_eq!(verified.payload, payload);
+    }
+
+    #[test]
+    fn marketplace_ed25519_verifier_rejects_untrusted_or_invalid_keys() {
+        let now = Utc::now();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let other = SigningKey::from_bytes(&[8; 32]);
+        let authorization = signed(&key, "marketplace", "marketplace-2026-01", json!({"a": 1}));
+        assert!(matches!(
+            trust(&other, now - Duration::seconds(1), None, false).verify(&authorization, now),
+            Err(marketplace_authorization::VerificationError::InvalidSignature)
+        ));
+        let mut wrong_issuer = authorization.clone();
+        wrong_issuer.issuer = "other".into();
+        assert!(matches!(
+            trust(&key, now - Duration::seconds(1), None, false).verify(&wrong_issuer, now),
+            Err(marketplace_authorization::VerificationError::UnknownIssuer)
+        ));
+        let mut unknown_key = authorization;
+        unknown_key.key_id = "unknown".into();
+        assert!(matches!(
+            trust(&key, now - Duration::seconds(1), None, false).verify(&unknown_key, now),
+            Err(marketplace_authorization::VerificationError::UnknownKey)
+        ));
+    }
+
+    #[test]
+    fn marketplace_ed25519_verifier_enforces_key_lifecycle_and_rotation_overlap() {
+        let now = Utc::now();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let authorization = signed(&key, "marketplace", "marketplace-2026-01", json!({"a": 1}));
+        assert!(matches!(
+            trust(&key, now + Duration::seconds(1), None, false).verify(&authorization, now),
+            Err(marketplace_authorization::VerificationError::KeyInactive)
+        ));
+        assert!(matches!(
+            trust(
+                &key,
+                now - Duration::seconds(2),
+                Some(now - Duration::seconds(1)),
+                false
+            )
+            .verify(&authorization, now),
+            Err(marketplace_authorization::VerificationError::KeyExpired)
+        ));
+        assert!(matches!(
+            trust(&key, now - Duration::seconds(1), None, true).verify(&authorization, now),
+            Err(marketplace_authorization::VerificationError::KeyRevoked)
+        ));
+        let next = SigningKey::from_bytes(&[8; 32]);
+        let overlap = marketplace_authorization::MarketplaceIssuerTrust::from_keys(
+            "marketplace",
+            vec![
+                marketplace_authorization::MarketplaceIssuerTrust::test_key(
+                    "marketplace",
+                    "marketplace-2026-01",
+                    key.verifying_key(),
+                    now - Duration::seconds(1),
+                    Some(now + Duration::seconds(1)),
+                    false,
+                ),
+                marketplace_authorization::MarketplaceIssuerTrust::test_key(
+                    "marketplace",
+                    "marketplace-2026-02",
+                    next.verifying_key(),
+                    now - Duration::seconds(1),
+                    None,
+                    false,
+                ),
+            ],
+        );
+        assert!(overlap.verify(&authorization, now).is_ok());
+        assert!(
+            overlap
+                .verify(
+                    &signed(&next, "marketplace", "marketplace-2026-02", json!({"a": 2})),
+                    now
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn marketplace_ed25519_verifier_rejects_bad_encoding_and_altered_payload() {
+        let now = Utc::now();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let trust = trust(&key, now - Duration::seconds(1), None, false);
+        let mut authorization = signed(&key, "marketplace", "marketplace-2026-01", json!({"a": 1}));
+        authorization.signature = "*not-base64url*".into();
+        assert!(matches!(
+            trust.verify(&authorization, now),
+            Err(marketplace_authorization::VerificationError::InvalidSignatureEncoding)
+        ));
+        let mut authorization = signed(&key, "marketplace", "marketplace-2026-01", json!({"a": 1}));
+        authorization.payload = json!({"a": 2});
+        assert!(matches!(
+            trust.verify(&authorization, now),
+            Err(marketplace_authorization::VerificationError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn marketplace_authorization_json_rejects_duplicates_and_preserves_arrays() {
+        assert!(matches!(
+            marketplace_authorization::parse_signed_authorization(
+                br#"{"issuer":"marketplace","issuer":"other","key_id":"k","alg":"Ed25519","signature":"x","payload":{}}"#,
+            ),
+            Err(marketplace_authorization::VerificationError::DuplicateJsonKey)
+        ));
+        assert_eq!(
+            marketplace_authorization::canonical_json(&json!({"z": 1, "a": [{"b": 2, "a": 1}, 3]})),
+            br#"{"a":[{"a":1,"b":2},3],"z":1}"#
+        );
     }
 }

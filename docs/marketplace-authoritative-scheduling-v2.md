@@ -2,7 +2,7 @@
 
 ## Status
 
-This document records the DevHub Phase 4B boundary. It does not declare
+This document records the DevHub Phase 4D boundary. It does not declare
 end-to-end authoritative placement available. The v2 parser is exposed at:
 
 ```text
@@ -16,6 +16,53 @@ selecting a provider, selecting a node, or starting a workload. This is
 intentional until Marketplace provides a trusted commercial-authorization and
 network-membership authority, and DevHub has a transactional capacity
 reservation substrate.
+
+## Phase 4D authorization foundation
+
+DevHub now has an Ed25519 verifier foundation in
+`crates/hive-cloud/src/marketplace_authorization.rs`. Trust is explicitly
+operator-configured using `HIVE_MARKETPLACE_AUTH_ISSUER` and
+`HIVE_MARKETPLACE_ED25519_KEYS`. Key entries use:
+
+```text
+issuer|key-id|base64url-ed25519-public-key|active-rfc3339|expires-rfc3339-or-empty|active-or-revoked
+```
+
+Multiple active keys permit deliberate rotation overlap. Unknown issuers and
+key IDs, inactive/expired/revoked keys, algorithms other than exactly
+`Ed25519`, invalid base64url, duplicate JSON keys, and invalid signatures are
+rejected. This trust source is separate from both
+`HIVE_MARKETPLACE_HMAC_KEYS` (Marketplace request authentication) and
+`HIVE_DEVHUB_EVENT_HMAC_KEYS` (DevHub callback authentication).
+
+The verifier sorts every object recursively, preserves array order, and emits
+compact UTF-8 JSON. It is intentionally **not claimed to implement RFC 8785**.
+Marketplace has not supplied authoritative cross-language fixtures describing
+its string escaping, Unicode handling, number serialization, or exact
+signature-envelope field exclusion. The signed-envelope parser rejects
+duplicate keys before ordinary serde deserialization, but the verifier remains
+a foundation only until those fixtures are available.
+
+DevHub has typed, disabled client operations for the confirmed private
+Marketplace paths:
+
+```text
+POST /v1/marketplace/internal/commercial-authorizations/check
+POST /v1/marketplace/internal/provider-eligibility/check
+```
+
+`HIVE_MARKETPLACE_SERVICE_URL` must be an HTTPS URL before their endpoint
+addresses can be formed. No request is sent: Marketplace has not provided an
+approved reverse-direction S2S authentication mechanism or either endpoint's
+request/response schema. DevHub will not reuse the inbound HMAC secret,
+invent a bearer/mTLS contract, or send guessed production bodies. A preferred
+network check returns an explicit unsupported result; it never falls back to
+standard placement.
+
+Consequently no signature, commercial authorization, provider eligibility,
+proposed THEO tier, policy, revocation, or network assertion activates
+scheduling. Tier thresholds remain inactive. In particular, Tier 0's proposed
+staking exemption cannot replace independent provider qualification.
 
 ## Compatibility matrix
 
