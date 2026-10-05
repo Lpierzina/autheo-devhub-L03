@@ -12,7 +12,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
-use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, Deserializer as _, Error as _, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
 pub const COMMERCIAL_AUTHORIZATION_CHECK_PATH: &str =
