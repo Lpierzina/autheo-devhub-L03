@@ -12,9 +12,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use hmac::{Hmac, Mac};
+use ring::rand::SecureRandom;
 use serde::de::{DeserializeSeed, Deserializer as _, Error as _, MapAccess, SeqAccess, Visitor};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 pub const COMMERCIAL_AUTHORIZATION_CHECK_PATH: &str =
     "/v1/marketplace/internal/commercial-authorizations/check";
@@ -414,40 +417,73 @@ fn parse_json_without_duplicate_keys(bytes: &[u8]) -> Result<Value, Verification
         })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommercialPolicy {
+    pub policy_id: String,
+    pub policy_version: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommercialAuthorizationCheck {
+    pub authorization_id: String,
     pub buyer_tenant_id: String,
     pub workload_order_id: String,
     pub workload_class: String,
-    pub policy_version: String,
+    pub policy: CommercialPolicy,
+    pub expected_authorization_revision: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderEligibilityCheck {
+    pub authorization_id: String,
     pub buyer_tenant_id: String,
     pub workload_order_id: String,
-    pub provider_id: String,
     pub workload_class: String,
+    pub policy: CommercialPolicy,
+    pub expected_authorization_revision: u64,
+    pub candidate_provider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_network_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_provider_membership_revision: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreferredNetworkCheck {
-    pub buyer_tenant_id: String,
-    pub workload_order_id: String,
-    pub network_id: String,
-    pub membership_revision: String,
-    pub provider_id: String,
+impl ProviderEligibilityCheck {
+    /// Standard placement contains none of the Preferred Network binding
+    /// fields. A Preferred Network placement carries every binding together.
+    pub fn has_valid_network_binding(&self) -> bool {
+        matches!(
+            (
+                self.network_id.as_deref(),
+                self.expected_network_revision,
+                self.expected_provider_membership_revision,
+            ),
+            (None, None, None)
+                | (Some(network_id), Some(network_revision), Some(membership_revision))
+                    if !network_id.is_empty() && network_revision > 0 && membership_revision > 0
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MarketplaceCheckError {
     AuthorizationUnavailable,
-    PreferredNetworkUnsupported,
+    AuthorizationDenied,
+    ProviderIneligible,
+    InvalidRequest,
 }
 
 #[derive(Clone, Debug)]
 pub struct MarketplaceS2sClient {
     base_url: reqwest::Url,
+    key_id: String,
+    secret: Vec<u8>,
+    scopes: BTreeSet<String>,
 }
 
 impl MarketplaceS2sClient {
@@ -457,9 +493,40 @@ impl MarketplaceS2sClient {
         let base_url = std::env::var("HIVE_MARKETPLACE_SERVICE_URL")
             .ok()
             .and_then(|value| reqwest::Url::parse(&value).ok())
-            .filter(|url| url.scheme() == "https" && url.host_str().is_some())
+            .filter(|url| {
+                url.scheme() == "https"
+                    && url.host_str().is_some()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+            })
             .ok_or(MarketplaceCheckError::AuthorizationUnavailable)?;
-        Ok(Self { base_url })
+        let key_id = std::env::var("DEVHUB_COMMERCIAL_AUTHORIZATION_KEY_ID")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .ok_or(MarketplaceCheckError::AuthorizationUnavailable)?;
+        let secret = std::env::var("DEVHUB_COMMERCIAL_AUTHORIZATION_SIGNING_SECRET")
+            .ok()
+            .filter(|value| value.len() >= 32)
+            .map(String::into_bytes)
+            .ok_or(MarketplaceCheckError::AuthorizationUnavailable)?;
+        let scopes = std::env::var("DEVHUB_COMMERCIAL_AUTHORIZATION_SCOPES")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|scope| !scope.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect::<BTreeSet<_>>()
+            })
+            .filter(|scopes| !scopes.is_empty())
+            .ok_or(MarketplaceCheckError::AuthorizationUnavailable)?;
+        Ok(Self {
+            base_url,
+            key_id,
+            secret,
+            scopes,
+        })
     }
 
     pub fn commercial_authorization_endpoint(&self) -> Result<reqwest::Url, MarketplaceCheckError> {
@@ -476,22 +543,221 @@ impl MarketplaceS2sClient {
 
     pub async fn check_commercial_authorization(
         &self,
-        _request: &CommercialAuthorizationCheck,
+        request: &CommercialAuthorizationCheck,
     ) -> Result<(), MarketplaceCheckError> {
-        Err(MarketplaceCheckError::AuthorizationUnavailable)
+        validate_commercial_request(request)?;
+        let response: CommercialAuthorizationResponse = self
+            .post_check(
+                "authorization:check",
+                COMMERCIAL_AUTHORIZATION_CHECK_PATH,
+                request,
+            )
+            .await?;
+        match response.result {
+            CommercialAuthorizationDecision::Active => Ok(()),
+            CommercialAuthorizationDecision::Expired
+            | CommercialAuthorizationDecision::Revoked
+            | CommercialAuthorizationDecision::Stale
+            | CommercialAuthorizationDecision::BindingMismatch
+            | CommercialAuthorizationDecision::PolicyMismatch => {
+                Err(MarketplaceCheckError::AuthorizationDenied)
+            }
+            CommercialAuthorizationDecision::Unavailable => {
+                Err(MarketplaceCheckError::AuthorizationUnavailable)
+            }
+        }
     }
 
     pub async fn check_provider_eligibility(
         &self,
-        _request: &ProviderEligibilityCheck,
+        request: &ProviderEligibilityCheck,
     ) -> Result<(), MarketplaceCheckError> {
-        Err(MarketplaceCheckError::AuthorizationUnavailable)
+        validate_provider_request(request)?;
+        let response: ProviderEligibilityResponse = self
+            .post_check("provider:check", PROVIDER_ELIGIBILITY_CHECK_PATH, request)
+            .await?;
+        match response.result {
+            ProviderEligibilityDecision::Eligible => Ok(()),
+            ProviderEligibilityDecision::Denied
+            | ProviderEligibilityDecision::Stale
+            | ProviderEligibilityDecision::BindingMismatch
+            | ProviderEligibilityDecision::PolicyMismatch => {
+                Err(MarketplaceCheckError::ProviderIneligible)
+            }
+            ProviderEligibilityDecision::Unavailable => {
+                Err(MarketplaceCheckError::AuthorizationUnavailable)
+            }
+        }
     }
 
-    pub async fn check_preferred_network(
+    async fn post_check<T: Serialize, R: for<'de> Deserialize<'de>>(
         &self,
-        _request: &PreferredNetworkCheck,
-    ) -> Result<(), MarketplaceCheckError> {
-        Err(MarketplaceCheckError::PreferredNetworkUnsupported)
+        required_scope: &str,
+        path: &str,
+        request: &T,
+    ) -> Result<R, MarketplaceCheckError> {
+        if !self.scopes.contains(required_scope) {
+            return Err(MarketplaceCheckError::AuthorizationUnavailable);
+        }
+        let endpoint = self
+            .base_url
+            .join(path)
+            .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+        if endpoint.path() != path || endpoint.query().is_some() {
+            return Err(MarketplaceCheckError::AuthorizationUnavailable);
+        }
+        let body = serde_json::to_vec(request)
+            .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+        let body_sha256 = hex::encode(Sha256::digest(&body));
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(S2S_TIMEOUT_MS))
+            .build()
+            .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+        let mut last_error = MarketplaceCheckError::AuthorizationUnavailable;
+        for _ in 0..S2S_MAX_RETRIES {
+            // A retry is a fresh authenticated request: the Marketplace
+            // contract consumes nonces atomically, so it must never reuse one.
+            let timestamp = Utc::now().timestamp_millis().to_string();
+            let nonce = random_nonce()?;
+            let signature = reverse_hmac_signature(
+                &self.secret,
+                "POST",
+                path,
+                &timestamp,
+                &nonce,
+                &self.key_id,
+                &body_sha256,
+            )?;
+            match client
+                .post(endpoint.clone())
+                .header("content-type", "application/json")
+                .header("x-devhub-timestamp", &timestamp)
+                .header("x-devhub-nonce", &nonce)
+                .header("x-devhub-key-id", &self.key_id)
+                .header("x-devhub-content-sha256", &body_sha256)
+                .header("x-devhub-signature", &signature)
+                .body(body.clone())
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    return response
+                        .json::<R>()
+                        .await
+                        .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable);
+                }
+                Ok(_) | Err(_) => last_error = MarketplaceCheckError::AuthorizationUnavailable,
+            }
+        }
+        Err(last_error)
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CommercialAuthorizationResponse {
+    pub result: CommercialAuthorizationDecision,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CommercialAuthorizationDecision {
+    Active,
+    Expired,
+    Revoked,
+    Stale,
+    BindingMismatch,
+    PolicyMismatch,
+    Unavailable,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProviderEligibilityResponse {
+    pub result: ProviderEligibilityDecision,
+    #[serde(default)]
+    pub checks: Option<BTreeMap<String, bool>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProviderEligibilityDecision {
+    Eligible,
+    Denied,
+    Stale,
+    BindingMismatch,
+    PolicyMismatch,
+    Unavailable,
+}
+
+pub(crate) fn validate_commercial_request(
+    request: &CommercialAuthorizationCheck,
+) -> Result<(), MarketplaceCheckError> {
+    (valid_contract_identifier(&request.authorization_id)
+        && valid_contract_identifier(&request.workload_order_id)
+        && valid_contract_identifier(&request.buyer_tenant_id)
+        && valid_contract_identifier(&request.workload_class)
+        && valid_contract_identifier(&request.policy.policy_id)
+        && request.policy.policy_version > 0
+        && request.expected_authorization_revision > 0)
+        .then_some(())
+        .ok_or(MarketplaceCheckError::InvalidRequest)
+}
+
+pub(crate) fn validate_provider_request(
+    request: &ProviderEligibilityCheck,
+) -> Result<(), MarketplaceCheckError> {
+    validate_commercial_request(&CommercialAuthorizationCheck {
+        authorization_id: request.authorization_id.clone(),
+        buyer_tenant_id: request.buyer_tenant_id.clone(),
+        workload_order_id: request.workload_order_id.clone(),
+        workload_class: request.workload_class.clone(),
+        policy: request.policy.clone(),
+        expected_authorization_revision: request.expected_authorization_revision,
+    })?;
+    (valid_contract_identifier(&request.candidate_provider_id)
+        && request.has_valid_network_binding())
+    .then_some(())
+    .ok_or(MarketplaceCheckError::InvalidRequest)
+}
+
+fn valid_contract_identifier(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256
+}
+
+fn random_nonce() -> Result<String, MarketplaceCheckError> {
+    let mut bytes = [0_u8; 24];
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+pub(crate) fn reverse_hmac_signature(
+    secret: &[u8],
+    method: &str,
+    path: &str,
+    timestamp: &str,
+    nonce: &str,
+    key_id: &str,
+    body_sha256: &str,
+) -> Result<String, MarketplaceCheckError> {
+    if method != "POST"
+        || !path.starts_with('/')
+        || path.contains('?')
+        || timestamp.len() != 13
+        || nonce.len() < 16
+        || nonce.len() > 256
+        || body_sha256.len() != 64
+        || !body_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(MarketplaceCheckError::InvalidRequest);
+    }
+    let canonical = format!("{method}\n{path}\n{timestamp}\n{nonce}\n{key_id}\n{body_sha256}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret)
+        .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+    mac.update(canonical.as_bytes());
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }
