@@ -6091,8 +6091,15 @@ mod health_tests {
         }
         #[derive(Deserialize)]
         struct CheckSamplesProvider {
+            standard_request: Value,
             request: Value,
             responses: VecOrObject,
+            negative_requests: Vec<CheckSamplesNegativeRequest>,
+        }
+        #[derive(Deserialize)]
+        struct CheckSamplesNegativeRequest {
+            test_id: String,
+            request: Value,
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -6175,40 +6182,38 @@ mod health_tests {
         ))
         .expect("unchanged Marketplace check API samples");
         let commercial: marketplace_authorization::CommercialAuthorizationCheck =
-            serde_json::from_value(samples.commercial_authorization.request)
+            serde_json::from_value(samples.commercial_authorization.request.clone())
                 .expect("commercial request schema");
         marketplace_authorization::validate_commercial_request(&commercial)
             .expect("commercial request contract");
+        marketplace_authorization::validate_commercial_request_value(
+            &samples.commercial_authorization.request,
+        )
+        .expect("commercial schema accepts Marketplace sample");
         let provider: marketplace_authorization::ProviderEligibilityCheck =
-            serde_json::from_value(samples.provider_eligibility.request)
+            serde_json::from_value(samples.provider_eligibility.request.clone())
                 .expect("provider request contract");
         marketplace_authorization::validate_provider_request(&provider)
             .expect("Preferred Network provider request contract");
-        let standard = marketplace_authorization::ProviderEligibilityCheck {
-            network_id: None,
-            expected_network_revision: None,
-            expected_provider_membership_revision: None,
-            ..provider.clone()
-        };
+        marketplace_authorization::validate_provider_request_value(
+            &samples.provider_eligibility.request,
+        )
+        .expect("Preferred Network schema accepts complete binding");
+        let standard: marketplace_authorization::ProviderEligibilityCheck =
+            serde_json::from_value(samples.provider_eligibility.standard_request.clone())
+                .expect("standard provider request schema");
         marketplace_authorization::validate_provider_request(&standard)
             .expect("standard placement omits all Preferred Network bindings");
-        for partial in [
-            marketplace_authorization::ProviderEligibilityCheck {
-                network_id: Some("network".into()),
-                expected_network_revision: None,
-                expected_provider_membership_revision: Some(1),
-                ..standard.clone()
-            },
-            marketplace_authorization::ProviderEligibilityCheck {
-                network_id: None,
-                expected_network_revision: Some(1),
-                expected_provider_membership_revision: Some(1),
-                ..standard.clone()
-            },
-        ] {
+        marketplace_authorization::validate_provider_request_value(
+            &samples.provider_eligibility.standard_request,
+        )
+        .expect("standard placement schema accepts no Preferred Network bindings");
+        for negative in &samples.provider_eligibility.negative_requests {
             assert_eq!(
-                marketplace_authorization::validate_provider_request(&partial),
-                Err(marketplace_authorization::MarketplaceCheckError::InvalidRequest)
+                marketplace_authorization::validate_provider_request_value(&negative.request),
+                Err(marketplace_authorization::MarketplaceCheckError::InvalidRequest),
+                "Marketplace negative schema sample unexpectedly accepted: {}",
+                negative.test_id,
             );
         }
         let mut unknown = serde_json::to_value(&commercial).expect("commercial JSON");
@@ -6218,9 +6223,22 @@ mod health_tests {
             .insert("unknown".into(), Value::Bool(true));
         assert!(
             serde_json::from_value::<marketplace_authorization::CommercialAuthorizationCheck>(
-                unknown
+                unknown.clone()
             )
             .is_err()
+        );
+        assert_eq!(
+            marketplace_authorization::validate_commercial_request_value(&unknown),
+            Err(marketplace_authorization::MarketplaceCheckError::InvalidRequest)
+        );
+        let mut unknown_provider = samples.provider_eligibility.standard_request.clone();
+        unknown_provider
+            .as_object_mut()
+            .expect("provider object")
+            .insert("unknown".into(), Value::Bool(true));
+        assert_eq!(
+            marketplace_authorization::validate_provider_request_value(&unknown_provider),
+            Err(marketplace_authorization::MarketplaceCheckError::InvalidRequest)
         );
         let VecOrObject::Object(commercial_responses) = samples.commercial_authorization.responses;
         let VecOrObject::Object(provider_responses) = samples.provider_eligibility.responses;

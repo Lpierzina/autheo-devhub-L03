@@ -8,6 +8,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
@@ -25,6 +26,109 @@ pub const PROVIDER_ELIGIBILITY_CHECK_PATH: &str =
     "/v1/marketplace/internal/provider-eligibility/check";
 pub const S2S_TIMEOUT_MS: u64 = 3_000;
 pub const S2S_MAX_RETRIES: u8 = 2;
+const COMMERCIAL_AUTHORIZATION_SCHEMA_ID: &str =
+    "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1";
+const PROVIDER_ELIGIBILITY_SCHEMA_ID: &str =
+    "https://marketplace-devhub.invalid/schemas/provider-eligibility-check-v1";
+const ED25519_ENVELOPE_SCHEMA_ID: &str =
+    "https://marketplace-devhub.invalid/schemas/ed25519-envelope-v1";
+
+struct MarketplaceSchemaValidators {
+    commercial_authorization: jsonschema::Validator,
+    provider_eligibility: jsonschema::Validator,
+    #[allow(dead_code)]
+    ed25519_envelope: jsonschema::Validator,
+}
+
+fn imported_schema(
+    source: &str,
+    expected_id: &str,
+) -> Result<(String, Value), MarketplaceCheckError> {
+    let schema: Value = serde_json::from_str(source)
+        .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+    let declared_id = schema
+        .get("$id")
+        .and_then(Value::as_str)
+        .filter(|id| *id == expected_id)
+        .map(ToOwned::to_owned)
+        .ok_or(MarketplaceCheckError::AuthorizationUnavailable)?;
+    Ok((declared_id, schema))
+}
+
+fn marketplace_schema_validators(
+) -> Result<&'static MarketplaceSchemaValidators, MarketplaceCheckError> {
+    static VALIDATORS: OnceLock<Result<MarketplaceSchemaValidators, MarketplaceCheckError>> =
+        OnceLock::new();
+    match VALIDATORS
+        .get_or_init(|| {
+            let (commercial_id, commercial) = imported_schema(
+                include_str!(
+                    "../../../docs/integrations/devhub-marketplace-phase-4e/schemas/commercial-authorization-check.schema.json"
+                ),
+                COMMERCIAL_AUTHORIZATION_SCHEMA_ID,
+            )?;
+            let (provider_id, provider) = imported_schema(
+                include_str!(
+                    "../../../docs/integrations/devhub-marketplace-phase-4e/schemas/provider-eligibility-check.schema.json"
+                ),
+                PROVIDER_ELIGIBILITY_SCHEMA_ID,
+            )?;
+            let (envelope_id, envelope) = imported_schema(
+                include_str!(
+                    "../../../docs/integrations/devhub-marketplace-phase-4e/schemas/ed25519-envelope.schema.json"
+                ),
+                ED25519_ENVELOPE_SCHEMA_ID,
+            )?;
+            let registry = jsonschema::Registry::new()
+                .add(commercial_id, &commercial)
+                .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?
+                .add(provider_id, &provider)
+                .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?
+                .add(envelope_id, &envelope)
+                .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?
+                .prepare()
+                .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+            let options = jsonschema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .with_registry(&registry);
+            Ok(MarketplaceSchemaValidators {
+                commercial_authorization: options
+                    .build(&commercial)
+                    .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?,
+                provider_eligibility: options
+                    .build(&provider)
+                    .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?,
+                ed25519_envelope: options
+                    .build(&envelope)
+                    .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?,
+            })
+        })
+        .as_ref()
+    {
+        Ok(validators) => Ok(validators),
+        Err(_) => Err(MarketplaceCheckError::AuthorizationUnavailable),
+    }
+}
+
+pub(crate) fn validate_commercial_request_value(
+    request: &Value,
+) -> Result<(), MarketplaceCheckError> {
+    marketplace_schema_validators()?
+        .commercial_authorization
+        .is_valid(request)
+        .then_some(())
+        .ok_or(MarketplaceCheckError::InvalidRequest)
+}
+
+pub(crate) fn validate_provider_request_value(
+    request: &Value,
+) -> Result<(), MarketplaceCheckError> {
+    marketplace_schema_validators()?
+        .provider_eligibility
+        .is_valid(request)
+        .then_some(())
+        .ok_or(MarketplaceCheckError::InvalidRequest)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrustedIssuerKey {
@@ -701,6 +805,9 @@ pub(crate) enum ProviderEligibilityDecision {
 pub(crate) fn validate_commercial_request(
     request: &CommercialAuthorizationCheck,
 ) -> Result<(), MarketplaceCheckError> {
+    let value = serde_json::to_value(request)
+        .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+    validate_commercial_request_value(&value)?;
     (valid_contract_identifier(&request.authorization_id)
         && valid_contract_identifier(&request.workload_order_id)
         && valid_contract_identifier(&request.buyer_tenant_id)
@@ -715,6 +822,9 @@ pub(crate) fn validate_commercial_request(
 pub(crate) fn validate_provider_request(
     request: &ProviderEligibilityCheck,
 ) -> Result<(), MarketplaceCheckError> {
+    let value = serde_json::to_value(request)
+        .map_err(|_| MarketplaceCheckError::AuthorizationUnavailable)?;
+    validate_provider_request_value(&value)?;
     validate_commercial_request(&CommercialAuthorizationCheck {
         authorization_id: request.authorization_id.clone(),
         buyer_tenant_id: request.buyer_tenant_id.clone(),
