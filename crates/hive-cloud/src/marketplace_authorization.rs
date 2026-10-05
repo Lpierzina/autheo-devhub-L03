@@ -1,10 +1,10 @@
 //! Marketplace commercial-authorization verification boundary.
 //!
 //! This module deliberately has no HTTP route and does not enable placement.
-//! The Phase 4E protected-envelope fields are verified here, but this checkout
-//! does not contain the reverse S2S HMAC contract or endpoint schemas. The
-//! exposed client is therefore typed but unavailable, rather than sending
-//! guessed bodies or unauthenticated requests.
+//! The imported Phase 4E contracts define both the protected envelope and the
+//! reverse S2S HMAC checks. The typed client is fail-closed; until the
+//! authoritative schemas are mutually interoperable, no scheduling path calls
+//! it or treats a response as an authorization to place work.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -78,6 +78,7 @@ pub enum VerificationError {
     InvalidSignatureEncoding,
     InvalidSignature,
     DuplicateJsonKey,
+    UnknownEnvelopeField,
     InvalidJson,
     CanonicalizationUnsupported,
 }
@@ -251,7 +252,13 @@ impl MarketplaceIssuerTrust {
 /// parser accepts last-key-wins duplicates.
 pub fn parse_signed_authorization(bytes: &[u8]) -> Result<SignedAuthorization, VerificationError> {
     let value = parse_json_without_duplicate_keys(bytes)?;
-    serde_json::from_value(value).map_err(|_| VerificationError::InvalidJson)
+    serde_json::from_value(value).map_err(|error| {
+        if error.to_string().contains("unknown field") {
+            VerificationError::UnknownEnvelopeField
+        } else {
+            VerificationError::InvalidJson
+        }
+    })
 }
 
 /// Constructs the exact protected object required by the supplied Marketplace
@@ -698,7 +705,7 @@ pub(crate) fn validate_commercial_request(
         && valid_contract_identifier(&request.workload_order_id)
         && valid_contract_identifier(&request.buyer_tenant_id)
         && valid_contract_identifier(&request.workload_class)
-        && valid_contract_identifier(&request.policy.policy_id)
+        && !request.policy.policy_id.is_empty()
         && request.policy.policy_version > 0
         && request.expected_authorization_revision > 0)
         .then_some(())
@@ -747,8 +754,10 @@ pub(crate) fn reverse_hmac_signature(
         || !path.starts_with('/')
         || path.contains('?')
         || timestamp.len() != 13
+        || !timestamp.bytes().all(|byte| byte.is_ascii_digit())
         || nonce.len() < 16
         || nonce.len() > 256
+        || URL_SAFE_NO_PAD.decode(nonce).is_err()
         || body_sha256.len() != 64
         || !body_sha256
             .bytes()

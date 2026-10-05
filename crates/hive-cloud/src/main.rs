@@ -5876,6 +5876,8 @@ mod health_tests {
     struct Ed25519ExpectedVerification {
         outcome: String,
         #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
         verification_at: Option<String>,
     }
 
@@ -5895,6 +5897,29 @@ mod health_tests {
         chrono::DateTime::parse_from_rfc3339(value)
             .expect("fixture RFC3339 time")
             .with_timezone(&Utc)
+    }
+
+    fn fixture_verification_reason(
+        error: &marketplace_authorization::VerificationError,
+    ) -> &'static str {
+        match error {
+            marketplace_authorization::VerificationError::UnknownIssuer => "unknown_issuer",
+            marketplace_authorization::VerificationError::UnknownKey => "unknown_key",
+            marketplace_authorization::VerificationError::KeyExpired => "expired_key",
+            marketplace_authorization::VerificationError::KeyRevoked => "revoked_key",
+            marketplace_authorization::VerificationError::UnsupportedAlgorithm => {
+                "unsupported_algorithm"
+            }
+            marketplace_authorization::VerificationError::InvalidSignatureEncoding => {
+                "malformed_signature"
+            }
+            marketplace_authorization::VerificationError::InvalidSignature => "signature_invalid",
+            marketplace_authorization::VerificationError::DuplicateJsonKey => "duplicate_json_key",
+            marketplace_authorization::VerificationError::UnknownEnvelopeField => {
+                "unknown_envelope_field"
+            }
+            other => panic!("fixture exercised an unclassified verification error: {other:?}"),
+        }
     }
 
     #[test]
@@ -5967,10 +5992,14 @@ mod health_tests {
                 case.raw_envelope_utf8.as_bytes(),
             ) {
                 Ok(authorization) => authorization,
-                Err(
-                    marketplace_authorization::VerificationError::DuplicateJsonKey
-                    | marketplace_authorization::VerificationError::InvalidJson,
-                ) if case.expected_verification.outcome == "denied" => continue,
+                Err(error) if case.expected_verification.outcome == "denied" => {
+                    assert_eq!(
+                        case.expected_verification.reason.as_deref(),
+                        Some(fixture_verification_reason(&error)),
+                        "negative Marketplace fixture parse reason drifted"
+                    );
+                    continue;
+                }
                 Err(error) => panic!("negative fixture parse failed unexpectedly: {error:?}"),
             };
             let fixture_key = fixture
@@ -6015,9 +6044,13 @@ mod health_tests {
                     "the binding sample must be cryptographically valid before binding is checked"
                 );
             } else {
-                assert!(
-                    trust.verify(&authorization, at).is_err(),
-                    "negative Marketplace fixture unexpectedly verified"
+                let error = trust
+                    .verify(&authorization, at)
+                    .expect_err("negative Marketplace fixture unexpectedly verified");
+                assert_eq!(
+                    case.expected_verification.reason.as_deref(),
+                    Some(fixture_verification_reason(&error)),
+                    "negative Marketplace fixture verification reason drifted"
                 );
             }
         }
@@ -6044,6 +6077,7 @@ mod health_tests {
             raw_request_body: String,
             body_sha256: Option<String>,
             expected_signature_hex: Option<String>,
+            expected_authentication_outcome: String,
         }
         #[derive(Deserialize)]
         struct CheckSamples {
@@ -6077,26 +6111,63 @@ mod health_tests {
             .filter(|vector| vector.expected_signature_hex.is_some())
             .count();
         assert_eq!(signed, 2, "fixture signed-vector count changed");
-        for vector in reverse
+        let mut authenticated_replay_scopes = std::collections::BTreeSet::new();
+        let authenticated_timestamp = reverse
             .vectors
             .iter()
-            .filter(|vector| vector.expected_signature_hex.is_some())
-        {
-            let digest = hex::encode(sha2::Sha256::digest(vector.raw_request_body.as_bytes()));
-            assert_eq!(Some(digest.as_str()), vector.body_sha256.as_deref());
-            assert_eq!(
-                marketplace_authorization::reverse_hmac_signature(
-                    reverse.credential.secret_test_only.as_bytes(),
-                    &vector.method,
-                    &vector.exact_path,
-                    &vector.timestamp_ms,
-                    &vector.nonce,
-                    &reverse.credential.key_id,
-                    &digest,
-                )
-                .expect("fixture signing parameters"),
-                vector.expected_signature_hex.as_deref().expect("signature")
+            .find(|vector| vector.expected_authentication_outcome == "authenticated")
+            .expect("fixture has an authenticated vector")
+            .timestamp_ms
+            .parse::<i64>()
+            .expect("fixture timestamp");
+        for vector in &reverse.vectors {
+            let replay_scope = format!(
+                "{}:{}:{}",
+                reverse.credential.key_id, vector.exact_path, vector.nonce
             );
+            match vector.expected_authentication_outcome.as_str() {
+                "authenticated" => {
+                    let digest =
+                        hex::encode(sha2::Sha256::digest(vector.raw_request_body.as_bytes()));
+                    assert_eq!(Some(digest.as_str()), vector.body_sha256.as_deref());
+                    assert_eq!(
+                        marketplace_authorization::reverse_hmac_signature(
+                            reverse.credential.secret_test_only.as_bytes(),
+                            &vector.method,
+                            &vector.exact_path,
+                            &vector.timestamp_ms,
+                            &vector.nonce,
+                            &reverse.credential.key_id,
+                            &digest,
+                        )
+                        .expect("fixture signing parameters"),
+                        vector.expected_signature_hex.as_deref().expect("signature")
+                    );
+                    assert!(
+                        authenticated_replay_scopes.insert(replay_scope),
+                        "authenticated fixture nonce must be unique in its replay scope"
+                    );
+                }
+                "refused_replay" => {
+                    assert!(vector.expected_signature_hex.is_none());
+                    assert!(
+                        authenticated_replay_scopes.contains(&replay_scope),
+                        "replay fixture must reuse an authenticated nonce in the same scope"
+                    );
+                }
+                "refused_timestamp" => {
+                    assert!(vector.expected_signature_hex.is_none());
+                    let timestamp = vector
+                        .timestamp_ms
+                        .parse::<i64>()
+                        .expect("fixture timestamp");
+                    assert!(
+                        authenticated_timestamp - timestamp > 90_000,
+                        "timestamp fixture must exceed the 90-second tolerance"
+                    );
+                }
+                other => panic!("unknown reverse-HMAC fixture outcome: {other}"),
+            }
         }
 
         let samples: CheckSamples = serde_json::from_str(include_str!(
