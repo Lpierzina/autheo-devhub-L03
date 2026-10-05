@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "public_result_mapping": {
+    "commercial": { "active": "allowed", "expired": "denied", "revoked": "denied", "stale": "denied", "binding_mismatch": "denied", "policy_mismatch": "denied", "unavailable": "unavailable" },
+    "provider": { "eligible": "allowed", "denied": "denied", "stale": "denied", "binding_mismatch": "denied", "policy_mismatch": "denied", "unavailable": "unavailable" }
+  },
+  "implementation_detail_codes": [
+    "invalid_s2s_caller", "missing_authorization", "revoked_authorization", "expired_authorization",
+    "wrong_order_or_tenant", "inactive_policy", "provider_not_approved", "provider_suspended",
+    "compliance_unavailable", "staking_evidence_unavailable", "network_not_authorized",
+    "network_membership_revoked", "network_revision_stale", "unapproved_workload_class",
+    "missing_authoritative_persistence", "evidence_source_unavailable"
+  ],
+  "rule": "Do not expose implementation_detail_codes through the current privacy-preserving endpoint responses without a versioned contract."
+}

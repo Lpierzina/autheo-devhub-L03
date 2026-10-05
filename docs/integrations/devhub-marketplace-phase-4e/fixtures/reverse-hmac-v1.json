@@ -1,0 +1,52 @@
+{
+  "fixture_version": "1",
+  "credential": {
+    "service_identity": "devhub",
+    "key_id": "devhub-test-key-1",
+    "secret_test_only": "devhub-marketplace-test-hmac-secret-0123456789"
+  },
+  "vectors": [
+    {
+      "test_id": "commercial-check",
+      "method": "POST",
+      "exact_path": "/v1/marketplace/internal/commercial-authorizations/check",
+      "timestamp_ms": "1760000000000",
+      "nonce": "YWJjZGVmZ2hpamtsbW5vcA",
+      "raw_request_body": "{\"authorization_id\":\"mca_fixture_001\",\"workload_order_id\":\"wo_fixture_001\",\"buyer_tenant_id\":\"tenant_fixture_001\",\"workload_class\":\"community-small\",\"policy\":{\"policy_id\":\"commercial-policy\",\"policy_version\":1},\"expected_authorization_revision\":1}",
+      "body_sha256": "5fccaea9e41f49e00626048b413d9d0d22d27f6bc4f27fa78fc58e070d565ddf",
+      "canonical_hmac_signing_string": "POST\n/v1/marketplace/internal/commercial-authorizations/check\n1760000000000\nYWJjZGVmZ2hpamtsbW5vcA\ndevhub-test-key-1\n5fccaea9e41f49e00626048b413d9d0d22d27f6bc4f27fa78fc58e070d565ddf",
+      "expected_signature_hex": "60fb011cdfabd7d6eb2a597ff4b34317b479475455fb0532d8cf30534b329c6a",
+      "expected_authentication_outcome": "authenticated"
+    },
+    {
+      "test_id": "provider-check",
+      "method": "POST",
+      "exact_path": "/v1/marketplace/internal/provider-eligibility/check",
+      "timestamp_ms": "1760000000123",
+      "nonce": "cHJvdmlkZXItbm9uY2UtMDAwMQ",
+      "raw_request_body": "{\"authorization_id\":\"mca_fixture_001\",\"workload_order_id\":\"wo_fixture_001\",\"buyer_tenant_id\":\"tenant_fixture_001\",\"workload_class\":\"community-small\",\"policy\":{\"policy_id\":\"commercial-policy\",\"policy_version\":1},\"expected_authorization_revision\":1,\"candidate_provider_id\":\"provider_fixture_001\",\"network_id\":\"network_fixture_001\",\"expected_network_revision\":7,\"expected_provider_membership_revision\":9}",
+      "body_sha256": "38c1cbfd4c3ea32b829dbe9b06c55f9f6d0960ee1c8b8500d04b6cc277e9da17",
+      "canonical_hmac_signing_string": "POST\n/v1/marketplace/internal/provider-eligibility/check\n1760000000123\ncHJvdmlkZXItbm9uY2UtMDAwMQ\ndevhub-test-key-1\n38c1cbfd4c3ea32b829dbe9b06c55f9f6d0960ee1c8b8500d04b6cc277e9da17",
+      "expected_signature_hex": "9ea4ad46b65bfece1afd0be05975e59d58dbb4e5aa5854ed4dc88cc42ebff60d",
+      "expected_authentication_outcome": "authenticated"
+    },
+    {
+      "test_id": "replayed-nonce",
+      "method": "POST",
+      "exact_path": "/v1/marketplace/internal/commercial-authorizations/check",
+      "timestamp_ms": "1760000000000",
+      "nonce": "YWJjZGVmZ2hpamtsbW5vcA",
+      "raw_request_body": "{\"authorization_id\":\"mca_fixture_001\",\"workload_order_id\":\"wo_fixture_001\",\"buyer_tenant_id\":\"tenant_fixture_001\",\"workload_class\":\"community-small\",\"policy\":{\"policy_id\":\"commercial-policy\",\"policy_version\":1},\"expected_authorization_revision\":1}",
+      "expected_authentication_outcome": "refused_replay"
+    },
+    {
+      "test_id": "expired-timestamp",
+      "method": "POST",
+      "exact_path": "/v1/marketplace/internal/commercial-authorizations/check",
+      "timestamp_ms": "1759999909999",
+      "nonce": "ZXhwaXJlZC1ub25jZS0wMDE",
+      "raw_request_body": "{\"authorization_id\":\"mca_fixture_001\",\"workload_order_id\":\"wo_fixture_001\",\"buyer_tenant_id\":\"tenant_fixture_001\",\"workload_class\":\"community-small\",\"policy\":{\"policy_id\":\"commercial-policy\",\"policy_version\":1},\"expected_authorization_revision\":1}",
+      "expected_authentication_outcome": "refused_timestamp"
+    }
+  ]
+}
