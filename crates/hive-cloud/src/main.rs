@@ -129,15 +129,15 @@ use std::time::Duration;
 use clap::Parser;
 use fluid_compute::{Fluid, FluidConfig};
 use fluid_gateway::Gateway;
-use hive_backend::CellBackend;
 use hive_backend::firecracker::{FirecrackerBackend, FirecrackerConfig};
 use hive_backend::litebox::LiteboxBackend;
 use hive_backend::mock::{MockBackend, MockConfig};
+use hive_backend::CellBackend;
 use hive_controlplane::{BoxConfig, Hive, HiveConfig};
 use hive_core::now_ms;
 use hive_edge::{
-    BotManager, CdnCache, ConcurrencyLimiter, CronScheduler, NodeInfo, NodeRegistry, Plan, Router,
-    Waf, WorkflowEngine, workflows::WorkflowStep,
+    workflows::WorkflowStep, BotManager, CdnCache, ConcurrencyLimiter, CronScheduler, NodeInfo,
+    NodeRegistry, Plan, Router, Waf, WorkflowEngine,
 };
 
 use state::CloudState;
@@ -5570,16 +5570,28 @@ mod health_tests {
         key_id: &str,
         payload: serde_json::Value,
     ) -> marketplace_authorization::SignedAuthorization {
-        let signature = key.sign(&marketplace_authorization::canonical_json(&payload));
-        marketplace_authorization::SignedAuthorization {
+        let authorization = marketplace_authorization::SignedAuthorization {
             issuer: issuer.into(),
             key_id: key_id.into(),
             alg: "Ed25519".into(),
+            signature: String::new(),
+            payload,
+        };
+        let signature = key.sign(
+            &marketplace_authorization::canonical_signed_authorization(
+                &authorization.alg,
+                &authorization.issuer,
+                &authorization.key_id,
+                &authorization.payload,
+            )
+            .expect("test payload is canonicalizable"),
+        );
+        marketplace_authorization::SignedAuthorization {
             signature: base64::Engine::encode(
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD,
                 signature.to_bytes(),
             ),
-            payload,
+            ..authorization
         }
     }
 
@@ -5614,8 +5626,8 @@ mod health_tests {
             )
             .expect("valid Ed25519 signature");
         assert_eq!(
-            String::from_utf8(verified.canonical_payload).expect("canonical JSON is UTF-8"),
-            r#"{"items":[{"a":2,"z":1},"first"],"message":"café","z":{"a":1,"b":2}}"#
+            String::from_utf8(verified.canonical_signed_object).expect("canonical JSON is UTF-8"),
+            r#"{"alg":"Ed25519","issuer":"marketplace","key_id":"marketplace-2026-01","payload":{"items":[{"a":2,"z":1},"first"],"message":"café","z":{"a":1,"b":2}}}"#
         );
         assert_eq!(verified.payload, payload);
     }
@@ -5690,14 +5702,12 @@ mod health_tests {
             ],
         );
         assert!(overlap.verify(&authorization, now).is_ok());
-        assert!(
-            overlap
-                .verify(
-                    &signed(&next, "marketplace", "marketplace-2026-02", json!({"a": 2})),
-                    now
-                )
-                .is_ok()
-        );
+        assert!(overlap
+            .verify(
+                &signed(&next, "marketplace", "marketplace-2026-02", json!({"a": 2})),
+                now
+            )
+            .is_ok());
     }
 
     #[test]
@@ -5720,7 +5730,80 @@ mod health_tests {
     }
 
     #[test]
-    fn marketplace_authorization_json_rejects_duplicates_and_preserves_arrays() {
+    fn marketplace_ed25519_signature_covers_the_complete_protected_envelope() {
+        let now = Utc::now();
+        let first = SigningKey::from_bytes(&[7; 32]);
+        let second = SigningKey::from_bytes(&[8; 32]);
+        let issuer = "marketplace";
+        let authorization = signed(
+            &first,
+            issuer,
+            "marketplace-2026-01",
+            json!({"tenant":"tenant-a","order":"order-a"}),
+        );
+        let trust = marketplace_authorization::MarketplaceIssuerTrust::from_keys(
+            issuer,
+            vec![
+                marketplace_authorization::MarketplaceIssuerTrust::test_key(
+                    issuer,
+                    "marketplace-2026-01",
+                    first.verifying_key(),
+                    now - Duration::seconds(1),
+                    None,
+                    false,
+                ),
+                marketplace_authorization::MarketplaceIssuerTrust::test_key(
+                    issuer,
+                    "marketplace-2026-02",
+                    second.verifying_key(),
+                    now - Duration::seconds(1),
+                    None,
+                    false,
+                ),
+            ],
+        );
+        assert!(trust.verify(&authorization, now).is_ok());
+
+        // A payload-only signature was accepted by the Phase 4D foundation;
+        // Phase 4F must never accept it because protected metadata is signed.
+        let payload_only_signature = first.sign(
+            &marketplace_authorization::canonical_json(&authorization.payload)
+                .expect("test payload is canonicalizable"),
+        );
+        let payload_only = marketplace_authorization::SignedAuthorization {
+            signature: base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                payload_only_signature.to_bytes(),
+            ),
+            ..authorization.clone()
+        };
+        assert!(matches!(
+            trust.verify(&payload_only, now),
+            Err(marketplace_authorization::VerificationError::InvalidSignature)
+        ));
+
+        let mut substituted_issuer = authorization.clone();
+        substituted_issuer.issuer = "other".into();
+        assert!(matches!(
+            trust.verify(&substituted_issuer, now),
+            Err(marketplace_authorization::VerificationError::UnknownIssuer)
+        ));
+        let mut substituted_key = authorization.clone();
+        substituted_key.key_id = "marketplace-2026-02".into();
+        assert!(matches!(
+            trust.verify(&substituted_key, now),
+            Err(marketplace_authorization::VerificationError::InvalidSignature)
+        ));
+        let mut substituted_algorithm = authorization;
+        substituted_algorithm.alg = "Ed448".into();
+        assert!(matches!(
+            trust.verify(&substituted_algorithm, now),
+            Err(marketplace_authorization::VerificationError::UnsupportedAlgorithm)
+        ));
+    }
+
+    #[test]
+    fn marketplace_authorization_json_rejects_duplicates_and_uses_javascript_sorting() {
         assert!(matches!(
             marketplace_authorization::parse_signed_authorization(
                 br#"{"issuer":"marketplace","issuer":"other","key_id":"k","alg":"Ed25519","signature":"x","payload":{}}"#,
@@ -5728,8 +5811,23 @@ mod health_tests {
             Err(marketplace_authorization::VerificationError::DuplicateJsonKey)
         ));
         assert_eq!(
-            marketplace_authorization::canonical_json(&json!({"z": 1, "a": [{"b": 2, "a": 1}, 3]})),
+            marketplace_authorization::canonical_json(&json!({"z": 1, "a": [{"b": 2, "a": 1}, 3]}))
+                .expect("safe numbers"),
             br#"{"a":[{"a":1,"b":2},3],"z":1}"#
         );
+        // UTF-16 sort order differs from UTF-8 for this pair: U+E000 sorts
+        // after a surrogate pair in JavaScript, while UTF-8 byte sorting puts
+        // it first.
+        assert_eq!(
+            marketplace_authorization::canonical_json(&json!({"\u{e000}": 1, "😀": 2}))
+                .expect("safe numbers"),
+            "{\"😀\":2,\"\u{e000}\":1}".as_bytes()
+        );
+        assert!(matches!(
+            marketplace_authorization::canonical_json(
+                &json!({"exact_amount": 9_007_199_254_740_992_u64})
+            ),
+            Err(marketplace_authorization::VerificationError::CanonicalizationUnsupported)
+        ));
     }
 }

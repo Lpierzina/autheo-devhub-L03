@@ -1,18 +1,19 @@
-//! Marketplace commercial-authorization verification foundation.
+//! Marketplace commercial-authorization verification boundary.
 //!
 //! This module deliberately has no HTTP route and does not enable placement.
-//! Marketplace has not yet supplied the request/response schemas or reverse
-//! S2S authentication contract for its verification endpoints.  The exposed
-//! client is therefore typed but unavailable, rather than sending guessed
-//! bodies or unauthenticated requests.
+//! The Phase 4E protected-envelope fields are verified here, but this checkout
+//! does not contain the reverse S2S HMAC contract or endpoint schemas. The
+//! exposed client is therefore typed but unavailable, rather than sending
+//! guessed bodies or unauthenticated requests.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use serde::Deserialize;
 use serde::de::{DeserializeSeed, Deserializer as _, Error as _, MapAccess, SeqAccess, Visitor};
+use serde::Deserialize;
 use serde_json::Value;
 
 pub const COMMERCIAL_AUTHORIZATION_CHECK_PATH: &str =
@@ -46,8 +47,8 @@ pub struct SignedAuthorization {
     pub alg: String,
     /// Base64url without padding.
     pub signature: String,
-    /// Marketplace must sign this field alone.  This explicit separation avoids
-    /// guessing which envelope fields Marketplace excludes from a signature.
+    /// Authorization claims. The protected signing input also includes the
+    /// envelope's `alg`, `issuer`, and `key_id` fields.
     pub payload: Value,
 }
 
@@ -55,7 +56,9 @@ pub struct SignedAuthorization {
 pub struct VerifiedAuthorization {
     pub issuer: String,
     pub key_id: String,
-    pub canonical_payload: Vec<u8>,
+    /// Canonical UTF-8 bytes verified by Ed25519. This is the protected
+    /// envelope without `signature`, never `payload` alone.
+    pub canonical_signed_object: Vec<u8>,
     pub payload: Value,
 }
 
@@ -73,6 +76,7 @@ pub enum VerificationError {
     InvalidSignature,
     DuplicateJsonKey,
     InvalidJson,
+    CanonicalizationUnsupported,
 }
 
 impl MarketplaceIssuerTrust {
@@ -221,14 +225,19 @@ impl MarketplaceIssuerTrust {
         let payload_bytes = serde_json::to_vec(&authorization.payload)
             .map_err(|_| VerificationError::InvalidJson)?;
         let payload = parse_json_without_duplicate_keys(&payload_bytes)?;
-        let canonical_payload = canonical_json(&payload);
+        let canonical_signed_object = canonical_signed_authorization(
+            &authorization.alg,
+            &authorization.issuer,
+            &authorization.key_id,
+            &payload,
+        )?;
         key.public_key
-            .verify(&canonical_payload, &signature)
+            .verify(&canonical_signed_object, &signature)
             .map_err(|_| VerificationError::InvalidSignature)?;
         Ok(VerifiedAuthorization {
             issuer: authorization.issuer.clone(),
             key_id: authorization.key_id.clone(),
-            canonical_payload,
+            canonical_signed_object,
             payload,
         })
     }
@@ -242,22 +251,42 @@ pub fn parse_signed_authorization(bytes: &[u8]) -> Result<SignedAuthorization, V
     serde_json::from_value(value).map_err(|_| VerificationError::InvalidJson)
 }
 
-/// Marketplace's currently described algorithm: recursively sorted object
-/// keys, preserved array order, and compact serde JSON.  It is intentionally
-/// not labelled RFC 8785: Marketplace has not supplied authoritative vectors
-/// for string escaping, Unicode, number representation, or signed-field
-/// exclusion.  Production interoperability remains disabled until it does.
-pub fn canonical_json(value: &Value) -> Vec<u8> {
-    let mut out = String::new();
-    append_canonical_json(value, &mut out);
-    out.into_bytes()
+/// Constructs the exact protected object required by the supplied Marketplace
+/// envelope contract. `signature` is intentionally absent; every other
+/// envelope field is covered by the Ed25519 signature.
+pub fn canonical_signed_authorization(
+    alg: &str,
+    issuer: &str,
+    key_id: &str,
+    payload: &Value,
+) -> Result<Vec<u8>, VerificationError> {
+    let mut signed = serde_json::Map::new();
+    signed.insert("alg".into(), Value::String(alg.into()));
+    signed.insert("issuer".into(), Value::String(issuer.into()));
+    signed.insert("key_id".into(), Value::String(key_id.into()));
+    signed.insert("payload".into(), payload.clone());
+    canonical_json(&Value::Object(signed))
 }
 
-fn append_canonical_json(value: &Value, out: &mut String) {
+/// Marketplace's TypeScript-compatible recursive key-sort plus compact JSON
+/// serialization. This is deliberately not RFC 8785: object keys compare by
+/// UTF-16 code units, as JavaScript string sorting does, while arrays retain
+/// their input order. Finite JSON numbers use an ECMAScript formatter.
+///
+/// The raw-envelope parser rejects duplicate keys before a `Value` exists.
+/// Integer tokens outside JavaScript's safe range are refused so DevHub never
+/// silently changes an exact authorization claim while canonicalizing it.
+pub fn canonical_json(value: &Value) -> Result<Vec<u8>, VerificationError> {
+    let mut out = String::new();
+    append_canonical_json(value, &mut out)?;
+    Ok(out.into_bytes())
+}
+
+fn append_canonical_json(value: &Value, out: &mut String) -> Result<(), VerificationError> {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
-        Value::Number(value) => out.push_str(&value.to_string()),
+        Value::Number(value) => out.push_str(&canonical_number(value)?),
         Value::String(value) => {
             out.push_str(&serde_json::to_string(value).expect("strings serialize"))
         }
@@ -267,28 +296,49 @@ fn append_canonical_json(value: &Value, out: &mut String) {
                 if index > 0 {
                     out.push(',');
                 }
-                append_canonical_json(value, out);
+                append_canonical_json(value, out)?;
             }
             out.push(']');
         }
         Value::Object(values) => {
             out.push('{');
-            for (index, (key, value)) in values
-                .iter()
-                .collect::<BTreeMap<_, _>>()
-                .into_iter()
-                .enumerate()
-            {
+            let mut entries: Vec<_> = values.iter().collect();
+            entries.sort_unstable_by(|(left, _), (right, _)| utf16_cmp(left, right));
+            for (index, (key, value)) in entries.into_iter().enumerate() {
                 if index > 0 {
                     out.push(',');
                 }
                 out.push_str(&serde_json::to_string(key).expect("keys serialize"));
                 out.push(':');
-                append_canonical_json(value, out);
+                append_canonical_json(value, out)?;
             }
             out.push('}');
         }
     }
+    Ok(())
+}
+
+fn utf16_cmp(left: &str, right: &str) -> Ordering {
+    left.encode_utf16().cmp(right.encode_utf16())
+}
+
+fn canonical_number(value: &serde_json::Number) -> Result<String, VerificationError> {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    if value
+        .as_i64()
+        .is_some_and(|integer| integer.unsigned_abs() > MAX_SAFE_INTEGER)
+        || value
+            .as_u64()
+            .is_some_and(|integer| integer > MAX_SAFE_INTEGER)
+    {
+        return Err(VerificationError::CanonicalizationUnsupported);
+    }
+    let number = value
+        .as_f64()
+        .filter(|number| number.is_finite())
+        .ok_or(VerificationError::CanonicalizationUnsupported)?;
+    let mut buffer = ryu_js::Buffer::new();
+    Ok(buffer.format(number).to_owned())
 }
 
 fn parse_json_without_duplicate_keys(bytes: &[u8]) -> Result<Value, VerificationError> {

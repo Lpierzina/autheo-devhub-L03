@@ -17,7 +17,7 @@ intentional until Marketplace provides a trusted commercial-authorization and
 network-membership authority, and DevHub has a transactional capacity
 reservation substrate.
 
-## Phase 4D authorization foundation
+## Phase 4F authorization boundary
 
 DevHub now has an Ed25519 verifier foundation in
 `crates/hive-cloud/src/marketplace_authorization.rs`. Trust is explicitly
@@ -35,13 +35,29 @@ rejected. This trust source is separate from both
 `HIVE_MARKETPLACE_HMAC_KEYS` (Marketplace request authentication) and
 `HIVE_DEVHUB_EVENT_HMAC_KEYS` (DevHub callback authentication).
 
-The verifier sorts every object recursively, preserves array order, and emits
-compact UTF-8 JSON. It is intentionally **not claimed to implement RFC 8785**.
-Marketplace has not supplied authoritative cross-language fixtures describing
-its string escaping, Unicode handling, number serialization, or exact
-signature-envelope field exclusion. The signed-envelope parser rejects
-duplicate keys before ordinary serde deserialization, but the verifier remains
-a foundation only until those fixtures are available.
+Marketplace's supplied Phase 4E protected-envelope description requires
+Ed25519 verification over the canonical UTF-8 encoding of exactly:
+
+```json
+{"alg":"Ed25519","issuer":"marketplace-authority-id","key_id":"approved-key-id","payload":{}}
+```
+
+The `signature` field is excluded, while `alg`, `issuer`, `key_id`, and
+`payload` are all protected. DevHub rejects payload-only signatures. The
+verifier recursively sorts object keys using JavaScript UTF-16 comparison,
+preserves array order, emits compact UTF-8 JSON, and uses ECMAScript number
+rendering. It is intentionally **not RFC 8785**. Duplicate keys are rejected
+before ordinary serde deserialization, and unsafe integer JSON values are
+refused rather than silently rounded; exact THEO amounts must be strings until
+Marketplace explicitly defines another lossless representation.
+
+This is not yet complete cryptographic interoperability. The Marketplace
+handoff file and any Marketplace-produced fixture are absent from this DevHub
+checkout, so DevHub has not independently verified Marketplace's exact
+TypeScript escaping behavior or a signed production-format byte vector. The
+remaining required Marketplace-generated fixtures are: complex nested JSON,
+Unicode, escaping and backslashes/control characters, JavaScript number edge
+cases, arrays/order, rotation overlap, and negative signatures.
 
 DevHub has typed, disabled client operations for the confirmed private
 Marketplace paths:
@@ -52,12 +68,12 @@ POST /v1/marketplace/internal/provider-eligibility/check
 ```
 
 `HIVE_MARKETPLACE_SERVICE_URL` must be an HTTPS URL before their endpoint
-addresses can be formed. No request is sent: Marketplace has not provided an
-approved reverse-direction S2S authentication mechanism or either endpoint's
-request/response schema. DevHub will not reuse the inbound HMAC secret,
-invent a bearer/mTLS contract, or send guessed production bodies. A preferred
-network check returns an explicit unsupported result; it never falls back to
-standard placement.
+addresses can be formed. No request is sent: this checkout has no authoritative
+reverse-direction HMAC header names, canonical signing bytes, service identity
+format, credential configuration format, request body, or response schema.
+DevHub will not reuse the inbound HMAC secret, invent a bearer/mTLS contract,
+or send guessed production bodies. A preferred network check returns an
+explicit unsupported result; it never falls back to standard placement.
 
 Consequently no signature, commercial authorization, provider eligibility,
 proposed THEO tier, policy, revocation, or network assertion activates
