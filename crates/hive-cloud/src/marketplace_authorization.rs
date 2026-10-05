@@ -457,16 +457,17 @@ impl ProviderEligibilityCheck {
     /// Standard placement contains none of the Preferred Network binding
     /// fields. A Preferred Network placement carries every binding together.
     pub fn has_valid_network_binding(&self) -> bool {
-        matches!(
-            (
-                self.network_id.as_deref(),
-                self.expected_network_revision,
-                self.expected_provider_membership_revision,
-            ),
-            (None, None, None)
-                | (Some(network_id), Some(network_revision), Some(membership_revision))
-                    if !network_id.is_empty() && network_revision > 0 && membership_revision > 0
-        )
+        match (
+            self.network_id.as_deref(),
+            self.expected_network_revision,
+            self.expected_provider_membership_revision,
+        ) {
+            (None, None, None) => true,
+            (Some(network_id), Some(network_revision), Some(membership_revision)) => {
+                !network_id.is_empty() && network_revision > 0 && membership_revision > 0
+            }
+            _ => false,
+        }
     }
 }
 
