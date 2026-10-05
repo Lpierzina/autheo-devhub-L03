@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "marketplace-devhub/ed25519-envelope-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issuer", "key_id", "alg", "signature", "payload"],
+  "properties": {
+    "issuer": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+    "key_id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$" },
+    "alg": { "const": "Ed25519" },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" },
+    "payload": { "type": "object" }
+  }
+}
