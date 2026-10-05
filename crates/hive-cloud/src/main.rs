@@ -5904,7 +5904,7 @@ mod health_tests {
         ))
         .expect("unchanged Marketplace Ed25519 fixture");
         assert_eq!(fixture.positive_vectors.len(), 7, "fixture count changed");
-        assert_eq!(fixture.negative_cases.len(), 10, "fixture count changed");
+        assert_eq!(fixture.negative_cases.len(), 11, "fixture count changed");
 
         for vector in &fixture.positive_vectors {
             let authorization = marketplace_authorization::parse_signed_authorization(
@@ -5963,19 +5963,16 @@ mod health_tests {
         }
 
         for case in &fixture.negative_cases {
-            let authorization = marketplace_authorization::parse_signed_authorization(
+            let authorization = match marketplace_authorization::parse_signed_authorization(
                 case.raw_envelope_utf8.as_bytes(),
-            );
-            if case.expected_verification.outcome == "denied"
-                && case.expected_verification.outcome.as_str() == "denied"
-                && matches!(
-                    authorization,
-                    Err(marketplace_authorization::VerificationError::DuplicateJsonKey)
-                )
-            {
-                continue;
-            }
-            let authorization = authorization.expect("non-duplicate negative fixture parses");
+            ) {
+                Ok(authorization) => authorization,
+                Err(
+                    marketplace_authorization::VerificationError::DuplicateJsonKey
+                    | marketplace_authorization::VerificationError::InvalidJson,
+                ) if case.expected_verification.outcome == "denied" => continue,
+                Err(error) => panic!("negative fixture parse failed unexpectedly: {error:?}"),
+            };
             let fixture_key = fixture
                 .keys
                 .iter()
