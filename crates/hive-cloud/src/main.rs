@@ -6077,6 +6077,7 @@ mod health_tests {
             raw_request_body: String,
             body_sha256: Option<String>,
             expected_signature_hex: Option<String>,
+            expected_authentication_outcome: String,
         }
         #[derive(Deserialize)]
         struct CheckSamples {
@@ -6110,26 +6111,63 @@ mod health_tests {
             .filter(|vector| vector.expected_signature_hex.is_some())
             .count();
         assert_eq!(signed, 2, "fixture signed-vector count changed");
-        for vector in reverse
+        let mut authenticated_replay_scopes = std::collections::BTreeSet::new();
+        let authenticated_timestamp = reverse
             .vectors
             .iter()
-            .filter(|vector| vector.expected_signature_hex.is_some())
-        {
-            let digest = hex::encode(sha2::Sha256::digest(vector.raw_request_body.as_bytes()));
-            assert_eq!(Some(digest.as_str()), vector.body_sha256.as_deref());
-            assert_eq!(
-                marketplace_authorization::reverse_hmac_signature(
-                    reverse.credential.secret_test_only.as_bytes(),
-                    &vector.method,
-                    &vector.exact_path,
-                    &vector.timestamp_ms,
-                    &vector.nonce,
-                    &reverse.credential.key_id,
-                    &digest,
-                )
-                .expect("fixture signing parameters"),
-                vector.expected_signature_hex.as_deref().expect("signature")
+            .find(|vector| vector.expected_authentication_outcome == "authenticated")
+            .expect("fixture has an authenticated vector")
+            .timestamp_ms
+            .parse::<i64>()
+            .expect("fixture timestamp");
+        for vector in &reverse.vectors {
+            let replay_scope = format!(
+                "{}:{}:{}",
+                reverse.credential.key_id, vector.exact_path, vector.nonce
             );
+            match vector.expected_authentication_outcome.as_str() {
+                "authenticated" => {
+                    let digest =
+                        hex::encode(sha2::Sha256::digest(vector.raw_request_body.as_bytes()));
+                    assert_eq!(Some(digest.as_str()), vector.body_sha256.as_deref());
+                    assert_eq!(
+                        marketplace_authorization::reverse_hmac_signature(
+                            reverse.credential.secret_test_only.as_bytes(),
+                            &vector.method,
+                            &vector.exact_path,
+                            &vector.timestamp_ms,
+                            &vector.nonce,
+                            &reverse.credential.key_id,
+                            &digest,
+                        )
+                        .expect("fixture signing parameters"),
+                        vector.expected_signature_hex.as_deref().expect("signature")
+                    );
+                    assert!(
+                        authenticated_replay_scopes.insert(replay_scope),
+                        "authenticated fixture nonce must be unique in its replay scope"
+                    );
+                }
+                "refused_replay" => {
+                    assert!(vector.expected_signature_hex.is_none());
+                    assert!(
+                        authenticated_replay_scopes.contains(&replay_scope),
+                        "replay fixture must reuse an authenticated nonce in the same scope"
+                    );
+                }
+                "refused_timestamp" => {
+                    assert!(vector.expected_signature_hex.is_none());
+                    let timestamp = vector
+                        .timestamp_ms
+                        .parse::<i64>()
+                        .expect("fixture timestamp");
+                    assert!(
+                        authenticated_timestamp - timestamp > 90_000,
+                        "timestamp fixture must exceed the 90-second tolerance"
+                    );
+                }
+                other => panic!("unknown reverse-HMAC fixture outcome: {other}"),
+            }
         }
 
         let samples: CheckSamples = serde_json::from_str(include_str!(
