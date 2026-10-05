@@ -4689,22 +4689,87 @@ async fn run_build(
             .projects
             .claim_volumes_exact(&project, incarnation, volume_names)?;
     }
-    let info = cloud.gw.deploy_full_with_runtime_exact_marketplace(
-        host_static_root,
-        Some(runtime_workdir),
-        manifest,
-        req.creator.clone().unwrap_or_else(|| "you".into()),
-        Some(git),
-        flip_production,
-        if build_failed {
-            DeployState::Error
+    let info = if build_failed {
+        cloud.gw.deploy_full_with_runtime_exact_marketplace(
+            host_static_root,
+            Some(runtime_workdir),
+            manifest,
+            req.creator.clone().unwrap_or_else(|| "you".into()),
+            Some(git),
+            flip_production,
+            DeployState::Error,
+            tenant.clone(),
+            incarnation,
+            req.marketplace_placement.clone(),
+        )
+    } else {
+        let mut staged = cloud.gw.stage_full_with_runtime_exact_marketplace(
+            host_static_root,
+            Some(runtime_workdir),
+            manifest,
+            req.creator.clone().unwrap_or_else(|| "you".into()),
+            Some(git),
+            flip_production,
+            tenant.clone(),
+            incarnation,
+            req.marketplace_placement.clone(),
+        )?;
+        let readiness = staged.prove_ready().await?.clone();
+        let staged_info = staged.info();
+        let source_record = staged_info
+            .git
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("deployment acceptance has no source record"))?;
+        let source_kind = if req.image_ref.is_some() || req.repo_url.starts_with("image://") {
+            crate::deployment_ledger::SourceKind::PrebuiltImage
+        } else if req.repo_url.starts_with("upload://") {
+            crate::deployment_ledger::SourceKind::Upload
         } else {
-            DeployState::Ready
-        },
-        tenant.clone(),
-        incarnation,
-        req.marketplace_placement.clone(),
-    );
+            crate::deployment_ledger::SourceKind::Git
+        };
+        let revision = match &source_kind {
+            crate::deployment_ledger::SourceKind::Git => {
+                if full_sha.is_empty() {
+                    source_record.commit.clone()
+                } else {
+                    full_sha.clone()
+                }
+            }
+            crate::deployment_ledger::SourceKind::Upload => source_record.commit.clone(),
+            crate::deployment_ledger::SourceKind::PrebuiltImage => req
+                .image_ref
+                .clone()
+                .unwrap_or_else(|| source_record.commit.clone()),
+        };
+        let deployment_id = staged_info.id.to_string();
+        let project_name = staged_info.project.clone();
+        let target = staged_info.target.clone();
+        cloud
+            .deployment_ledger
+            .accept(crate::deployment_ledger::DeploymentAcceptanceInput {
+                deployment_id: deployment_id.clone(),
+                project: project_name.clone(),
+                target,
+                source: crate::deployment_ledger::SourceIdentity {
+                    kind: source_kind,
+                    repository: source_record.repo_url.clone(),
+                    branch: source_record.branch.clone(),
+                    revision,
+                },
+                repository_build: repository_build.clone(),
+                runtime_artifact: runtime_artifact_identity.clone(),
+                readiness,
+            })?;
+        cloud.deployment_ledger.mark_published(
+            &deployment_id,
+            serde_json::json!({
+                "id": deployment_id,
+                "project": project_name,
+                "state": "ready",
+            }),
+        )?;
+        staged.publish_ready()?.0
+    };
     crate::admin::causal_stamp_new_deployment(cloud, &project, &info.id.0);
 
     // Record deployment ownership of each browser artifact now that the
