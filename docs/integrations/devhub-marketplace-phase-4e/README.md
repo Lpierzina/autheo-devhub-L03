@@ -75,6 +75,22 @@ unavailable and must also fail closed. `revoked` is a valid authoritative
 decision; `unavailable` means an authoritative record/dependency could not be
 read. Current disabled adapters return unavailable and never fabricate allow.
 
+The portable schema inventory is:
+
+- `schemas/commercial-authorization-check.schema.json` —
+  `https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1`
+- `schemas/provider-eligibility-check.schema.json` —
+  `https://marketplace-devhub.invalid/schemas/provider-eligibility-check-v1`
+- `schemas/ed25519-envelope.schema.json` —
+  `https://marketplace-devhub.invalid/schemas/ed25519-envelope-v1`
+
+All schemas declare JSON Schema Draft 2020-12 and use stable absolute `$id`
+values. Load the exact files and register each under its declared `$id`; no
+local aliases or custom resolvers are required. Each request endpoint declares
+its complete strict object shape and rejects unknown fields at that endpoint
+boundary. The provider endpoint references commercial shared value definitions
+at the property level only; response schemas remain independent `$defs`.
+
 Tier 0 needs no stake only under an approved active policy and all other
 qualifications. Proposed thresholds are Tier 0 `0`, Tier 1 `1000`, Tier 2
 `100000`, Tier 3 `500000` THEO; no threshold is active here. Tier 1–3 requires
@@ -89,6 +105,13 @@ confirm active network, buyer ownership or approved membership, candidate
 provider approval and opt-in, current terms/compliance/operational approval,
 expiry and revocation. Unsupported constrained placement fails closed—there is
 no standard-placement fallback.
+
+The provider endpoint's existing network binding group is its placement-scope
+discriminator: a request with none of `network_id`,
+`expected_network_revision`, or `expected_provider_membership_revision` is a
+standard Marketplace placement; a Preferred Network request must carry all
+three. Partial groups are rejected, so an arbitrary network ID or a stale or
+missing revision cannot be silently ignored or used as authorization.
 
 Migration `035_commercial_authorization_evidence_foundation.sql` adds
 `authorization_revision` to networks and buyer/provider memberships and
