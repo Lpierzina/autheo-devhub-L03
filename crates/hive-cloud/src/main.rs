@@ -5876,6 +5876,8 @@ mod health_tests {
     struct Ed25519ExpectedVerification {
         outcome: String,
         #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
         verification_at: Option<String>,
     }
 
@@ -5895,6 +5897,29 @@ mod health_tests {
         chrono::DateTime::parse_from_rfc3339(value)
             .expect("fixture RFC3339 time")
             .with_timezone(&Utc)
+    }
+
+    fn fixture_verification_reason(
+        error: &marketplace_authorization::VerificationError,
+    ) -> &'static str {
+        match error {
+            marketplace_authorization::VerificationError::UnknownIssuer => "unknown_issuer",
+            marketplace_authorization::VerificationError::UnknownKey => "unknown_key",
+            marketplace_authorization::VerificationError::KeyExpired => "expired_key",
+            marketplace_authorization::VerificationError::KeyRevoked => "revoked_key",
+            marketplace_authorization::VerificationError::UnsupportedAlgorithm => {
+                "unsupported_algorithm"
+            }
+            marketplace_authorization::VerificationError::InvalidSignatureEncoding => {
+                "malformed_signature"
+            }
+            marketplace_authorization::VerificationError::InvalidSignature => "signature_invalid",
+            marketplace_authorization::VerificationError::DuplicateJsonKey => "duplicate_json_key",
+            marketplace_authorization::VerificationError::UnknownEnvelopeField => {
+                "unknown_envelope_field"
+            }
+            other => panic!("fixture exercised an unclassified verification error: {other:?}"),
+        }
     }
 
     #[test]
@@ -5967,10 +5992,14 @@ mod health_tests {
                 case.raw_envelope_utf8.as_bytes(),
             ) {
                 Ok(authorization) => authorization,
-                Err(
-                    marketplace_authorization::VerificationError::DuplicateJsonKey
-                    | marketplace_authorization::VerificationError::InvalidJson,
-                ) if case.expected_verification.outcome == "denied" => continue,
+                Err(error) if case.expected_verification.outcome == "denied" => {
+                    assert_eq!(
+                        case.expected_verification.reason.as_deref(),
+                        Some(fixture_verification_reason(&error)),
+                        "negative Marketplace fixture parse reason drifted"
+                    );
+                    continue;
+                }
                 Err(error) => panic!("negative fixture parse failed unexpectedly: {error:?}"),
             };
             let fixture_key = fixture
@@ -6015,9 +6044,13 @@ mod health_tests {
                     "the binding sample must be cryptographically valid before binding is checked"
                 );
             } else {
-                assert!(
-                    trust.verify(&authorization, at).is_err(),
-                    "negative Marketplace fixture unexpectedly verified"
+                let error = trust
+                    .verify(&authorization, at)
+                    .expect_err("negative Marketplace fixture unexpectedly verified");
+                assert_eq!(
+                    case.expected_verification.reason.as_deref(),
+                    Some(fixture_verification_reason(&error)),
+                    "negative Marketplace fixture verification reason drifted"
                 );
             }
         }
