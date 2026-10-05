@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "marketplace-devhub/ed25519-envelope-v1",
+  "$id": "https://marketplace-devhub.invalid/schemas/ed25519-envelope-v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["issuer", "key_id", "alg", "signature", "payload"],

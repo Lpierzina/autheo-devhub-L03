@@ -1,22 +1,37 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "marketplace-devhub/provider-eligibility-check-v1",
-  "allOf": [{ "$ref": "commercial-authorization-check.schema.json" }],
+  "$id": "https://marketplace-devhub.invalid/schemas/provider-eligibility-check-v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["authorization_id", "workload_order_id", "buyer_tenant_id", "workload_class", "policy", "expected_authorization_revision", "candidate_provider_id"],
   "properties": {
-    "authorization_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "workload_order_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "buyer_tenant_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "workload_class": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "policy": { "type": "object", "additionalProperties": false, "required": ["policy_id", "policy_version"], "properties": { "policy_id": { "type": "string", "minLength": 1 }, "policy_version": { "type": "integer", "minimum": 1 } } },
-    "expected_authorization_revision": { "type": "integer", "minimum": 1 },
-    "candidate_provider_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "network_id": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "expected_network_revision": { "type": "integer", "minimum": 1 },
-    "expected_provider_membership_revision": { "type": "integer", "minimum": 1 }
+    "authorization_id": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/identifier" },
+    "workload_order_id": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/identifier" },
+    "buyer_tenant_id": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/identifier" },
+    "workload_class": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/identifier" },
+    "policy": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/policy" },
+    "expected_authorization_revision": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/revision" },
+    "candidate_provider_id": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/identifier" },
+    "network_id": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/identifier" },
+    "expected_network_revision": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/revision" },
+    "expected_provider_membership_revision": { "$ref": "https://marketplace-devhub.invalid/schemas/commercial-authorization-check-v1#/$defs/revision" }
   },
+  "oneOf": [
+    {
+      "title": "Standard Marketplace placement",
+      "not": {
+        "anyOf": [
+          { "properties": { "network_id": true }, "required": ["network_id"] },
+          { "properties": { "expected_network_revision": true }, "required": ["expected_network_revision"] },
+          { "properties": { "expected_provider_membership_revision": true }, "required": ["expected_provider_membership_revision"] }
+        ]
+      }
+    },
+    {
+      "title": "Preferred Provider Network placement",
+      "required": ["network_id", "expected_network_revision", "expected_provider_membership_revision"]
+    }
+  ],
   "$defs": {
     "response": { "type": "object", "additionalProperties": false, "required": ["result"], "properties": { "result": { "enum": ["eligible", "denied", "stale", "binding_mismatch", "policy_mismatch", "unavailable"] }, "checks": { "type": "object", "additionalProperties": { "type": "boolean" } } } }
   }
