@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "marketplace-devhub/provider-eligibility-check-v1",
+  "allOf": [{ "$ref": "commercial-authorization-check.schema.json" }],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["authorization_id", "workload_order_id", "buyer_tenant_id", "workload_class", "policy", "expected_authorization_revision", "candidate_provider_id"],
+  "properties": {
+    "authorization_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "workload_order_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "buyer_tenant_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "workload_class": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "policy": { "type": "object", "additionalProperties": false, "required": ["policy_id", "policy_version"], "properties": { "policy_id": { "type": "string", "minLength": 1 }, "policy_version": { "type": "integer", "minimum": 1 } } },
+    "expected_authorization_revision": { "type": "integer", "minimum": 1 },
+    "candidate_provider_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "network_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "expected_network_revision": { "type": "integer", "minimum": 1 },
+    "expected_provider_membership_revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "response": { "type": "object", "additionalProperties": false, "required": ["result"], "properties": { "result": { "enum": ["eligible", "denied", "stale", "binding_mismatch", "policy_mismatch", "unavailable"] }, "checks": { "type": "object", "additionalProperties": { "type": "boolean" } } } }
+  }
+}
