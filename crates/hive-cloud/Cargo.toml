@@ -149,6 +149,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 # Matches ECMAScript JSON number rendering in Marketplace's TypeScript
 # canonicalization; serde_json's numeric formatter does not promise this.
 ryu-js = "1.0.3"
+jsonschema = { version = "0.58.5", default-features = false }
 
 [features]
 # `zkauth` is DEFAULT-ON: it implements preview-deployment access protection
