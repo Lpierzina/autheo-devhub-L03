@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::{
     marketplace_releases::{DevHubWorkloadInstance, MarketplaceLifecycleEvent},
+    marketplace_reservations::AUTHORITY_UNAVAILABLE_REASON,
     schedule,
     state::CloudState,
 };
@@ -2108,13 +2109,15 @@ async fn validate_workload_intent_v2(
             "marketplace_buyer_mismatch",
         ));
     }
-    // Do not queue, reserve, attach, or launch anything here. Marketplace has
-    // not provided a trusted live authorization/revocation interface, and the
-    // replicated control plane's wholesale snapshots cannot safely implement
-    // a distributed compare-and-reserve transaction across nodes.
+    // Do not queue, reserve, attach, or launch anything here.  Phase 4G
+    // inspected the existing stores and found no quorum-confirmed conditional
+    // write / transaction primitive.  The replicated control plane's wholesale
+    // snapshots and GuardianDB's local-first CRDT replication cannot safely
+    // implement compare-and-reserve across concurrent nodes.  A configured
+    // authorization client would not repair that missing capacity authority.
     Err(error(
         axum::http::StatusCode::SERVICE_UNAVAILABLE,
-        "marketplace_authorization_evidence_unavailable",
+        AUTHORITY_UNAVAILABLE_REASON,
     ))
 }
 
